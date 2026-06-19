@@ -1,0 +1,337 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#fffaf5" />
+  <meta name="description" content="Combine front and back scans into A4 print-ready PDFs. 100% local - no server uploads." />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="DocStitcher" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <title>Document Stitcher</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,300;1,400&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <!-- jsPDF for PDF generation -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <link rel="stylesheet" href="assets/style.css" />
+</head>
+<body>
+  <div class="noise-bg"></div>
+
+  <!-- ===== MAIN APP ===== -->
+  <div id="app-main">
+    <div class="page-wrap app-shell">
+
+      <header class="header fade-up">
+        <div class="header-brand">
+          <div class="brand-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="3" width="9" height="13" rx="2"/>
+              <rect x="13" y="3" width="9" height="13" rx="2"/>
+              <path d="M2 20h20"/>
+            </svg>
+          </div>
+          <div>
+            <h1 class="brand-name">Document Stitcher</h1>
+            <p class="brand-tagline">A4 only - local PDF maker - no uploads</p>
+          </div>
+        </div>
+        <button class="btn-ghost" id="helpBtn" onclick="toggleHelp()">Help</button>
+      </header>
+
+      <div class="glow-line fade-up fade-up-1"></div>
+
+      <div id="helpPanel" class="help-panel" style="display:none">
+        <h3>How to use</h3>
+        <ol>
+          <li>Add one document card for every front/back pair.</li>
+          <li>Upload the front and back images. The signature image is optional.</li>
+          <li>Choose portrait for stacked placement or landscape for left/right placement.</li>
+          <li>Adjust each card's quality slider and watch its PDF size update.</li>
+          <li>Download cards separately or use Download All to start each PDF download one by one.</li>
+        </ol>
+      </div>
+
+      <section class="batch-toolbar fade-up fade-up-2">
+        <div>
+          <div class="section-label">Documents</div>
+          <p class="toolbar-sub"><span id="readyCount">0 ready</span> - A4 paper - clean PDF output</p>
+        </div>
+        <div class="toolbar-actions">
+          <button class="btn-secondary" onclick="addDocument()">Add Document</button>
+          <button class="btn-primary" id="downloadAllBtn" onclick="downloadAllDocuments()" disabled>Download All</button>
+        </div>
+      </section>
+
+      <div id="documentsList" class="documents-list fade-up fade-up-3"></div>
+
+    </div>
+  </div>
+
+  <!-- ===== SINGLE-DOC TOOLS PAGE ===== -->
+  <div id="sdt-page" style="display:none">
+    <div class="page-wrap">
+      <div class="topbar fade-up">
+        <button class="back-btn" onclick="sdtClose()">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M9 11L5 7l4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Back to Stitcher
+        </button>
+        <span class="badge badge-ready">Single-Doc Tools</span>
+      </div>
+
+      <div style="margin-top:18px" class="fade-up">
+        <h1 class="page-title">Single-Side Tools</h1>
+        <p class="page-sub">Compress, crop, rotate, convert and watermark - 100% local, no uploads.</p>
+      </div>
+      <div class="glow-line fade-up" style="margin-bottom:28px"></div>
+
+      <div class="tab-bar fade-up">
+        <button class="tab-btn active" onclick="sdt.switchTab('compress',this)">Compress</button>
+        <button class="tab-btn" onclick="sdt.switchTab('crop',this)">Crop</button>
+        <button class="tab-btn" onclick="sdt.switchTab('rotate',this)">Rotate / Flip</button>
+        <button class="tab-btn" onclick="sdt.switchTab('convert',this)">Convert</button>
+        <button class="tab-btn" onclick="sdt.switchTab('watermark',this)">Watermark</button>
+      </div>
+
+      <!-- COMPRESS -->
+      <div class="tool-section active" id="tab-compress">
+        <div class="card" style="padding:28px">
+          <div class="card-title">Image Quality &amp; Size Reducer</div>
+          <div class="drop-zone sdt-drop" id="compDrop" onclick="document.getElementById('compInput').click()"
+               ondragover="sdt.dzDrag(event,'compDrop')" ondragleave="sdt.dzLeave('compDrop')" ondrop="sdt.dzDrop(event,'compDrop',sdt.loadCompressImg)">
+            <input type="file" id="compInput" accept="image/*" onchange="sdt.loadCompressImg(this.files[0])">
+            <div id="compPlaceholder" class="sdt-placeholder"><div class="drop-icon">Image</div><div class="drop-label">Click or drag image here</div><div class="drop-hint">JPG, PNG, WebP supported</div></div>
+            <img id="compPreview" class="drop-preview" style="display:none" alt="preview">
+            <div id="compOverlay" class="drop-overlay" style="display:none"><button class="btn-ghost" onclick="sdt.clearTool('compress',event)">Clear</button></div>
+          </div>
+          <div id="compControls" style="display:none;margin-top:18px">
+            <div class="ctrl-row">
+              <div class="ctrl-group"><label class="ctrl-label">Output Format</label>
+                <select class="ctrl-select" id="compFormat" onchange="sdt.updateCompPreview()">
+                  <option value="jpeg">JPEG (best compression)</option>
+                  <option value="webp">WebP (modern, tiny)</option>
+                  <option value="png">PNG (lossless)</option>
+                </select>
+              </div>
+              <div class="ctrl-group"><label class="ctrl-label">Quality <span id="compQualLabel">80%</span></label>
+                <div class="slider-wrap"><input type="range" id="compQual" min="1" max="100" value="80" oninput="sdt.updateQualLabel();sdt.updateCompPreview()" style="--pct:80%"></div>
+              </div>
+              <div class="ctrl-group"><label class="ctrl-label">Max Width (px)</label>
+                <div class="slider-wrap"><input type="range" id="compMaxW" min="0" max="4000" step="100" value="0" oninput="sdt.updateMaxWLabel();sdt.updateCompPreview()" style="--pct:0%"><span class="slider-val" id="compMaxWLabel">Original</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="stats-bar" id="compStats" style="display:none">
+            <div class="stat-item"><span class="stat-label">Original</span><span class="stat-val" id="statOrigSize">-</span></div>
+            <div class="stat-item"><span class="stat-label">Compressed</span><span class="stat-val orange" id="statNewSize">-</span></div>
+            <div class="stat-item"><span class="stat-label">Saved</span><span class="stat-val green" id="statSaved">-</span></div>
+            <div class="stat-item"><span class="stat-label">Dimensions</span><span class="stat-val" id="statDims">-</span></div>
+          </div>
+          <div id="compOutput" style="display:none;margin-top:20px">
+            <div class="output-label">Preview - compressed output</div>
+            <div class="output-preview-wrap"><img id="compOutImg" alt="compressed output"></div>
+            <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
+              <button class="btn-primary" onclick="sdt.downloadCompressed()">Download</button>
+              <button class="btn-secondary" onclick="sdtSendToApp('compOutImg','compressed_doc')">Send to Stitcher</button>
+              <button class="btn-secondary" onclick="sdt.clearTool('compress',null)">Clear</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- CROP -->
+      <div class="tool-section" id="tab-crop">
+        <div class="card" style="padding:28px">
+          <div class="card-title">Crop Image</div>
+          <div class="drop-zone sdt-drop" id="cropDrop" onclick="document.getElementById('cropInput').click()"
+               ondragover="sdt.dzDrag(event,'cropDrop')" ondragleave="sdt.dzLeave('cropDrop')" ondrop="sdt.dzDrop(event,'cropDrop',sdt.loadCropImg)">
+            <input type="file" id="cropInput" accept="image/*" onchange="sdt.loadCropImg(this.files[0])">
+            <div id="cropPlaceholder" class="sdt-placeholder"><div class="drop-icon">Crop</div><div class="drop-label">Click or drag image to crop</div><div class="drop-hint">Then drag to select crop area</div></div>
+          </div>
+          <div id="cropEditor" style="display:none;margin-top:20px">
+            <div class="output-label">Drag to select crop area</div>
+            <div style="text-align:center;margin-top:8px">
+              <div class="crop-canvas-wrap" id="cropCanvasWrap">
+                <canvas id="cropCanvas"></canvas>
+                <div class="crop-overlay" id="cropOverlay" style="display:none"></div>
+              </div>
+            </div>
+            <div class="stats-bar" style="margin-top:14px">
+              <div class="stat-item"><span class="stat-label">Crop X</span><span class="stat-val" id="cropX">-</span></div>
+              <div class="stat-item"><span class="stat-label">Crop Y</span><span class="stat-val" id="cropY">-</span></div>
+              <div class="stat-item"><span class="stat-label">Width</span><span class="stat-val" id="cropW">-</span></div>
+              <div class="stat-item"><span class="stat-label">Height</span><span class="stat-val" id="cropH">-</span></div>
+            </div>
+            <div id="cropOutputSection" style="display:none;margin-top:16px">
+              <div class="output-label">Cropped preview</div>
+              <div class="output-preview-wrap"><img id="cropOutImg" alt="cropped"></div>
+            </div>
+            <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
+              <button class="btn-primary" id="cropApplyBtn" onclick="sdt.applyCrop()" disabled>Apply Crop</button>
+              <button class="btn-secondary" id="cropDownloadBtn" onclick="sdt.downloadCropped()" style="display:none">Download</button>
+              <button class="btn-secondary" id="cropSendBtn" onclick="sdtSendToApp('cropOutImg','cropped_doc')" style="display:none">Send to Stitcher</button>
+              <button class="btn-secondary" onclick="sdt.resetCropSelection()">Reset Selection</button>
+              <button class="btn-secondary" onclick="sdt.clearTool('crop',null)">Clear</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ROTATE -->
+      <div class="tool-section" id="tab-rotate">
+        <div class="card" style="padding:28px">
+          <div class="card-title">Rotate &amp; Flip</div>
+          <div class="drop-zone sdt-drop" id="rotateDrop" onclick="document.getElementById('rotateInput').click()"
+               ondragover="sdt.dzDrag(event,'rotateDrop')" ondragleave="sdt.dzLeave('rotateDrop')" ondrop="sdt.dzDrop(event,'rotateDrop',sdt.loadRotateImg)">
+            <input type="file" id="rotateInput" accept="image/*" onchange="sdt.loadRotateImg(this.files[0])">
+            <div id="rotatePlaceholder" class="sdt-placeholder"><div class="drop-icon">Rotate</div><div class="drop-label">Click or drag image here</div><div class="drop-hint">Then use buttons below</div></div>
+          </div>
+          <div id="rotateEditor" style="display:none;margin-top:20px">
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
+              <button class="btn-secondary" onclick="sdt.applyRotate(-90)">Rotate 90 deg Left</button>
+              <button class="btn-secondary" onclick="sdt.applyRotate(90)">Rotate 90 deg Right</button>
+              <button class="btn-secondary" onclick="sdt.applyRotate(180)">Rotate 180 deg</button>
+              <button class="btn-ghost" onclick="sdt.applyFlip('h')">Flip H</button>
+              <button class="btn-ghost" onclick="sdt.applyFlip('v')">Flip V</button>
+            </div>
+            <div style="text-align:center">
+              <div class="output-preview-wrap" style="display:inline-block;max-width:100%">
+                <img id="rotatePreview" alt="rotated" style="max-height:320px;width:auto;max-width:100%">
+              </div>
+            </div>
+            <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
+              <button class="btn-primary" onclick="sdt.downloadRotated()">Download</button>
+              <button class="btn-secondary" onclick="sdtSendToApp('rotatePreview','rotated_doc')">Send to Stitcher</button>
+              <button class="btn-secondary" onclick="sdt.clearTool('rotate',null)">Clear</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- CONVERT -->
+      <div class="tool-section" id="tab-convert">
+        <div class="card" style="padding:28px">
+          <div class="card-title">Format Converter</div>
+          <div class="drop-zone sdt-drop" id="convertDrop" onclick="document.getElementById('convertInput').click()"
+               ondragover="sdt.dzDrag(event,'convertDrop')" ondragleave="sdt.dzLeave('convertDrop')" ondrop="sdt.dzDrop(event,'convertDrop',sdt.loadConvertImg)">
+            <input type="file" id="convertInput" accept="image/*" onchange="sdt.loadConvertImg(this.files[0])">
+            <div id="convertPlaceholder" class="sdt-placeholder"><div class="drop-icon">Convert</div><div class="drop-label">Click or drag image here</div><div class="drop-hint">Convert between JPG, PNG, WebP</div></div>
+          </div>
+          <div id="convertEditor" style="display:none;margin-top:20px">
+            <div class="ctrl-row">
+              <div class="ctrl-group"><label class="ctrl-label">Convert To</label>
+                <select class="ctrl-select" id="convertFmt" onchange="sdt.updateConvertPreview()">
+                  <option value="jpeg">JPEG</option><option value="png">PNG</option><option value="webp">WebP</option>
+                </select>
+              </div>
+              <div class="ctrl-group"><label class="ctrl-label">Quality <span id="convertQualLabel">90%</span></label>
+                <div class="slider-wrap"><input type="range" id="convertQual" min="1" max="100" value="90" oninput="sdt.updateConvertQualLabel();sdt.updateConvertPreview()" style="--pct:90%"></div>
+              </div>
+            </div>
+            <div class="stats-bar" style="margin-top:14px">
+              <div class="stat-item"><span class="stat-label">Original format</span><span class="stat-val" id="convOrigFmt">-</span></div>
+              <div class="stat-item"><span class="stat-label">Original size</span><span class="stat-val" id="convOrigSize">-</span></div>
+              <div class="stat-item"><span class="stat-label">New size</span><span class="stat-val orange" id="convNewSize">-</span></div>
+            </div>
+            <div style="margin-top:16px">
+              <div class="output-label">Converted preview</div>
+              <div class="output-preview-wrap"><img id="convertOutImg" alt="converted"></div>
+            </div>
+            <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
+              <button class="btn-primary" onclick="sdt.downloadConverted()">Download</button>
+              <button class="btn-secondary" onclick="sdtSendToApp('convertOutImg','converted_doc')">Send to Stitcher</button>
+              <button class="btn-secondary" onclick="sdt.clearTool('convert',null)">Clear</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- WATERMARK -->
+      <div class="tool-section" id="tab-watermark">
+        <div class="card" style="padding:28px">
+          <div class="card-title">Text Watermark</div>
+          <div class="drop-zone sdt-drop" id="wmDrop" onclick="document.getElementById('wmInput').click()"
+               ondragover="sdt.dzDrag(event,'wmDrop')" ondragleave="sdt.dzLeave('wmDrop')" ondrop="sdt.dzDrop(event,'wmDrop',sdt.loadWmImg)">
+            <input type="file" id="wmInput" accept="image/*" onchange="sdt.loadWmImg(this.files[0])">
+            <div id="wmPlaceholder" class="sdt-placeholder"><div class="drop-icon">Watermark</div><div class="drop-label">Click or drag image here</div><div class="drop-hint">Add a custom text watermark</div></div>
+          </div>
+          <div id="wmEditor" style="display:none;margin-top:20px">
+            <div style="margin-bottom:14px">
+              <label class="ctrl-label" style="margin-bottom:8px">Watermark Text</label>
+              <input type="text" class="wm-input" id="wmText" value="CONFIDENTIAL" oninput="sdt.updateWmPreview()">
+            </div>
+            <div class="ctrl-row">
+              <div class="ctrl-group"><label class="ctrl-label">Position</label>
+                <select class="ctrl-select" id="wmPos" onchange="sdt.updateWmPreview()">
+                  <option value="center">Center</option><option value="tile">Tiled</option>
+                  <option value="topleft">Top Left</option><option value="topright">Top Right</option>
+                  <option value="bottomleft">Bottom Left</option><option value="bottomright">Bottom Right</option>
+                </select>
+              </div>
+              <div class="ctrl-group"><label class="ctrl-label">Font Size <span id="wmSizeLabel">48px</span></label>
+                <div class="slider-wrap"><input type="range" id="wmSize" min="12" max="200" value="48" oninput="sdt.updateWmSizeLabel();sdt.updateWmPreview()" style="--pct:22%"></div>
+              </div>
+              <div class="ctrl-group"><label class="ctrl-label">Opacity <span id="wmOpLabel">40%</span></label>
+                <div class="slider-wrap"><input type="range" id="wmOp" min="5" max="100" value="40" oninput="sdt.updateWmOpLabel();sdt.updateWmPreview()" style="--pct:40%"></div>
+              </div>
+            </div>
+            <div class="ctrl-row" style="margin-top:14px">
+              <div class="ctrl-group"><label class="ctrl-label">Rotation <span id="wmRotLabel">-30 deg</span></label>
+                <div class="slider-wrap"><input type="range" id="wmRot" min="-90" max="90" value="-30" oninput="sdt.updateWmRotLabel();sdt.updateWmPreview()" style="--pct:33%"></div>
+              </div>
+              <div class="ctrl-group"><label class="ctrl-label">Colour</label>
+                <div style="display:flex;align-items:center;gap:10px">
+                  <input type="color" id="wmColor" value="#ff7b54" onchange="sdt.updateWmPreview()">
+                  <span style="font-size:13px;color:var(--text-muted)">Pick colour</span>
+                </div>
+              </div>
+            </div>
+            <div style="margin-top:16px">
+              <div class="output-label">Preview</div>
+              <div class="output-preview-wrap"><img id="wmOutImg" alt="watermarked"></div>
+            </div>
+            <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
+              <button class="btn-primary" onclick="sdt.downloadWatermarked()">Download</button>
+              <button class="btn-secondary" onclick="sdtSendToApp('wmOutImg','watermarked_doc')">Send to Stitcher</button>
+              <button class="btn-secondary" onclick="sdt.clearTool('watermark',null)">Clear</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- end page-wrap -->
+    <div class="toast-wrap" id="sdtToastWrap"></div>
+  </div><!-- end sdt-page -->
+
+
+  <!-- Floating SDT button -->
+  <button id="sdt-fab" onclick="sdtOpen()" title="Single-Doc Tools">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+    <span class="fab-label">Single-Doc Tools</span>
+  </button>
+
+  <!-- Lightbox -->
+  <div id="lightbox" role="dialog" aria-modal="true" style="display:none" onclick="closeLightbox(event)">
+    <button class="lightbox-close" onclick="closeLightbox()">x</button>
+    <img id="lightboxImg" alt="Full view">
+  </div>
+
+  <!-- Send-to-slot picker -->
+  <div id="slotPicker" style="display:none" onclick="closeSlotPicker(event)">
+    <div class="slot-picker-box">
+      <div class="slot-picker-title">Send to document card</div>
+      <div id="slotPickerBody"></div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast-wrap" id="toastWrap"></div>
+
+  <script src="assets/app.js"></script>
+</body>
+</html>
+
