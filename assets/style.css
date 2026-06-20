@@ -746,3 +746,128 @@ input[type=color] {
 @media (max-width: 700px) {
   .doc-slot-grid, .doc-slot-grid.with-signature { grid-template-columns: 1fr; }
 }
+
+/* ============================================================
+   v7.0 Additions
+============================================================ */
+
+/* ---- Download Format Picker ---- */
+.dl-picker-box {
+  background: #fffaf5;
+  border-radius: 20px;
+  padding: 28px;
+  max-width: 380px;
+  width: 94%;
+  box-shadow: 0 32px 64px rgba(0,0,0,0.28), 0 10px 28px rgba(0,0,0,0.1);
+  animation: popIn 0.28s cubic-bezier(.22,.68,0,1.2);
+}
+.dl-picker-title {
+  font-family: var(--font-display);
+  font-size: 15px; font-weight: 700;
+  color: var(--text); letter-spacing: -0.01em;
+  margin-bottom: 18px; text-align: center;
+}
+.dl-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+.dl-fmt-btn {
+  display: flex; flex-direction: column; align-items: center; gap: 5px;
+  padding: 18px 10px;
+  border: 2px solid var(--border);
+  border-radius: 14px;
+  background: rgba(255,255,255,0.85);
+  cursor: pointer;
+  transition: all 0.22s cubic-bezier(.22,.68,0,1.2);
+  font-family: var(--font-display);
+}
+.dl-fmt-btn:hover { transform: translateY(-3px); border-color: var(--accent); box-shadow: 0 12px 28px rgba(249,107,63,0.2); }
+.dl-fmt-btn:active { transform: translateY(0); }
+.dl-fmt-icon { font-size: 28px; line-height: 1; }
+.dl-fmt-label { font-weight: 800; font-size: 15px; color: var(--text); }
+.dl-fmt-sub { font-size: 10.5px; color: var(--text-faint); font-weight: 500; text-align: center; }
+.dl-pdf:hover { border-color: #e04560; box-shadow: 0 12px 28px rgba(224,69,96,0.2); }
+.dl-jpg:hover { border-color: #f9a640; }
+.dl-png:hover { border-color: var(--success); }
+
+/* ---- Signature Placer Modal ---- */
+.sig-placer-header { text-align: center; }
+.sig-placer-title {
+  font-family: var(--font-display); font-size: 18px; font-weight: 700;
+  color: #fff; letter-spacing: -0.02em; margin-bottom: 6px;
+}
+.sig-placer-hint {
+  font-size: 12px; color: rgba(255,255,255,0.6);
+  font-family: var(--font-body);
+}
+.sig-placer-info {
+  display: flex; align-items: center; gap: 10px;
+  font-family: var(--font-display); font-size: 13px;
+  color: rgba(255,255,255,0.7);
+  background: rgba(255,255,255,0.08);
+  padding: 8px 18px; border-radius: 9px;
+  border: 1px solid rgba(255,255,255,0.12);
+}
+.sig-placer-info strong { color: #fff; font-size: 14px; }
+
+/* Arrow Joystick */
+.arrow-joystick {
+  display: grid;
+  grid-template-columns: repeat(3, 40px);
+  grid-template-rows: repeat(2, 40px);
+  gap: 6px;
+}
+.joy-btn {
+  width: 40px; height: 40px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.14);
+  border: 1px solid rgba(255,255,255,0.2);
+  color: #fff; font-size: 16px;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: background 0.15s, transform 0.15s;
+  font-family: var(--font-display);
+}
+.joy-btn:hover { background: rgba(249,107,63,0.5); transform: scale(1.1); }
+.joy-btn:active { background: rgba(249,107,63,0.8); transform: scale(0.95); }
+
+/* ---- Multi-tool section labels ---- */
+.mt-section-label {
+  font-family: var(--font-display); font-size: 11px; font-weight: 800;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-faint); margin-bottom: 10px; margin-top: 4px;
+  display: flex; align-items: center; gap: 8px;
+}
+.mt-section-label::after {
+  content: ''; flex: 1; height: 1px;
+  background: linear-gradient(90deg, var(--border), transparent);
+}
+#mtApplyCropBtn.active-state {
+  background: linear-gradient(135deg, var(--success), #50d4a8) !important;
+  color: #fff !important;
+  box-shadow: 0 8px 20px rgba(24,168,122,0.3) !important;
+}
+
+/* ---- One-sided card slots ---- */
+.doc-slot-grid.one-sided {
+  grid-template-columns: 1fr;
+}
+.doc-slot-grid.one-sided.with-signature {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+/* ---- PDF auto-detect badge ---- */
+.pdf-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 9.5px; font-weight: 800; letter-spacing: 0.07em;
+  text-transform: uppercase; padding: 2px 7px; border-radius: 6px;
+  background: rgba(224,69,96,0.1); color: #c84e2a;
+  border: 1px solid rgba(224,69,96,0.18);
+  margin-left: 5px;
+}
+
+/* Ensure dlPickerModal can show (was double-style trapping it) */
+#dlPickerModal { display: none; }
+#dlPickerModal.show { display: flex; }
+#sigPlacerModal { display: none; }
+#sigPlacerModal.show { display: flex; }
