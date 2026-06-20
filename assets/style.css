@@ -596,31 +596,54 @@ input[type=color] {
 .estimate-pill strong { color: var(--accent); font-family: var(--font-display); font-size: 16px; font-weight: 700; }
 .estimate-pill.ready strong { color: var(--success); }
 .doc-layout-preview { display: flex; justify-content: center; margin: 2px 0 18px; }
+
+/* ---- Live canvas paper preview ---- */
 .paper-mini {
-  position: relative; width: 150px;
-  aspect-ratio: 210 / 297;
-  border: 1px solid rgba(30,44,64,0.14);
+  position: relative;
+  border: 1px solid rgba(30,44,64,0.13);
   background: #fff;
-  box-shadow: 0 10px 24px rgba(30,44,64,0.07);
+  box-shadow: 0 12px 28px rgba(30,44,64,0.09), 0 2px 6px rgba(30,44,64,0.05);
   border-radius: 2px;
+  overflow: hidden;
 }
-.doc-layout-preview.landscape .paper-mini { width: 210px; aspect-ratio: 297 / 210; }
-.mini-slot {
-  position: absolute; display: grid; place-items: center;
-  color: var(--text-muted); font-family: var(--font-display);
-  font-size: 10.5px; font-weight: 700;
-  background: linear-gradient(135deg, rgba(249,107,63,0.09), rgba(110,216,196,0.09));
+/* Portrait: A4 ratio 210:297 ≈ 0.707 */
+.doc-layout-preview.portrait .paper-mini  { width: 110px; aspect-ratio: 210 / 297; }
+/* Landscape: A4 ratio 297:210 ≈ 1.414 */
+.doc-layout-preview.landscape .paper-mini { width: 155px; aspect-ratio: 297 / 210; }
+
+.paper-mini-canvas {
+  cursor: pointer;
+  transition: box-shadow 0.22s, transform 0.22s cubic-bezier(.22,.68,0,1.2);
 }
-.doc-layout-preview.portrait .mini-front { inset: 0 0 50% 0; }
-.doc-layout-preview.portrait .mini-back { inset: 50% 0 0 0; }
-.doc-layout-preview.landscape .mini-front { inset: 0 50% 0 0; }
-.doc-layout-preview.landscape .mini-back { inset: 0 0 0 50%; }
-.mini-sign {
-  position: absolute; left: 50%; bottom: 0; transform: translateX(-50%);
-  width: 44%; height: 12%; display: grid; place-items: center;
-  background: rgba(24,168,122,0.14); color: var(--success);
-  font-family: var(--font-display); font-size: 9.5px; font-weight: 800;
+.paper-mini-canvas:hover {
+  transform: translateY(-2px) scale(1.03);
+  box-shadow: 0 18px 36px rgba(30,44,64,0.14), 0 4px 10px rgba(249,107,63,0.1);
 }
+
+.preview-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+}
+
+.preview-canvas-hint {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: linear-gradient(to top, rgba(30,44,64,0.55), transparent);
+  color: #fff;
+  font-family: var(--font-display);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: center;
+  padding: 6px 4px 4px;
+  opacity: 0;
+  transition: opacity 0.2s;
+  pointer-events: none;
+}
+.paper-mini-canvas:hover .preview-canvas-hint { opacity: 1; }
 .doc-slot-grid {
   display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px;
 }
@@ -671,14 +694,49 @@ input[type=color] {
 .document-settings { grid-template-columns: 1fr; gap: 12px; margin-bottom: 14px; }
 .doc-name-input { width: 100%; font-size: clamp(18px, 2.4vw, 24px); }
 .doc-layout-preview { margin: 0 0 14px; }
-.paper-mini { width: 96px; }
-.doc-layout-preview.landscape .paper-mini { width: 134px; }
+.paper-mini { width: 110px; }
+.doc-layout-preview.landscape .paper-mini { width: 155px; }
 .signature-toggle {
   display: inline-flex; align-items: center; gap: 8px;
   margin: 0 0 12px; color: var(--text-muted);
   font-family: var(--font-display); font-size: 12px; font-weight: 700; cursor: pointer;
 }
 .signature-toggle input { width: 16px; height: 16px; accent-color: var(--accent); }
+
+/* ---- Signature size control ---- */
+.sign-scale-wrap {
+  margin: 0 0 12px;
+  padding: 11px 14px;
+  border: 1px solid rgba(240,203,160,0.6);
+  border-radius: 11px;
+  background: rgba(255,250,240,0.7);
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.sign-scale-presets {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.sign-preset-btn {
+  cursor: pointer;
+  padding: 4px 11px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: rgba(255,255,255,0.82);
+  color: var(--text-muted);
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 700;
+  transition: border-color 0.18s, color 0.18s, background 0.18s, transform 0.18s;
+}
+.sign-preset-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(249,107,63,0.07);
+  transform: translateY(-1px);
+}
 .doc-slot-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .doc-slot-grid.with-signature { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .compact-drop { min-height: 128px; }
