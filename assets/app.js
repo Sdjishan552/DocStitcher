@@ -499,8 +499,8 @@ function drawPreviewCanvas(doc, canvas) {
   // FIXED band — always the same size regardless of signScale.
   // Sized for the maximum possible signature (300% = 40mm) so images NEVER move.
   const SIGN_IMG_MAX = 40;   // mm — absolute ceiling for signature image height
-  const SIGN_BAND_H  = 46;   // mm — fixed: 40mm img + 6mm internal padding
-  const SIGN_GAP     = 4;    // mm — gap between image area bottom and band top
+  const SIGN_BAND_H  = 42;   // mm — fixed: 40mm img + 6mm internal padding
+  const SIGN_GAP     = 2;    // mm — gap between image area bottom and band top
 
   const imgAreaTop = pagePad;
   // imgAreaBot is CONSTANT — doesn't change when signScale changes
@@ -736,8 +736,8 @@ async function buildDocPdfBlob(doc) {
   // FIXED band — always the same size regardless of signScale.
   // Sized for maximum signature (300%) so images NEVER shrink when scale changes.
   const SIGN_IMG_MAX = 40;   // mm — absolute ceiling for signature image height
-  const SIGN_BAND_H  = 46;   // mm — fixed: 40mm img + 6mm internal padding
-  const SIGN_GAP     = 4;    // mm — gap between image area bottom and band top
+  const SIGN_BAND_H  = 42;   // mm — fixed: 40mm img + 6mm internal padding
+  const SIGN_GAP     = 2;    // mm — gap between image area bottom and band top
 
   // The usable rectangle for front + back images — CONSTANT, never changes
   const imgAreaTop  = pagePad;
