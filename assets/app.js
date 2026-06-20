@@ -1,4 +1,4 @@
-﻿/* ============================================================
+/* ============================================================
    Document Stitcher - Pure Vanilla JS
    No React, no build step.
 ============================================================ */
@@ -95,6 +95,7 @@ function addDocument() {
     quality: 80,
     files: { front: null, back: null, sign: null },
     signatureEnabled: false,
+    signScale: 1.0,
     estimate: null,
     estimateStatus: 'waiting',
     estimateTimer: null,
@@ -125,6 +126,8 @@ function renderDocuments() {
   state.docs.forEach(doc => {
     const slider = document.getElementById(`quality-${doc.id}`);
     if (slider) updateSliderGradient(slider);
+    // Draw live preview canvas after DOM settles
+    schedulePreviewDraw(doc);
   });
   updateBatchActions();
 }
@@ -173,10 +176,9 @@ function renderDocumentCard(doc) {
       </div>
 
       <div class="doc-layout-preview ${doc.orientation}">
-        <div class="paper-mini">
-          <span class="mini-slot mini-front">Front</span>
-          <span class="mini-slot mini-back">Back</span>
-          ${doc.signatureEnabled ? '<span class="mini-sign">Sign</span>' : ''}
+        <div class="paper-mini paper-mini-canvas" title="${ready ? 'Click to preview full layout' : 'Upload front and back to preview'}" onclick="openPreviewLightbox(${doc.id})">
+          <canvas class="preview-canvas" id="preview-canvas-${doc.id}"></canvas>
+          ${ready ? '<div class=\'preview-canvas-hint\'>click to enlarge</div>' : ''}
         </div>
       </div>
 
@@ -184,6 +186,7 @@ function renderDocumentCard(doc) {
         <input type="checkbox" ${doc.signatureEnabled ? 'checked' : ''} onchange="toggleSignature(${doc.id}, this.checked)">
         <span>Add optional signature image</span>
       </label>
+      ${doc.signatureEnabled ? renderSignScaleSlider(doc) : ''}
 
       <div class="doc-slot-grid ${doc.signatureEnabled ? 'with-signature' : ''}">
         ${renderSlot(doc, 'front')}
@@ -193,6 +196,7 @@ function renderDocumentCard(doc) {
 
       <div class="document-actions">
         <button class="btn-primary" onclick="downloadDocument(${doc.id})" ${ready ? '' : 'disabled'}>Download PDF</button>
+        ${ready ? '<button class="btn-secondary" onclick="openPreviewLightbox(' + doc.id + ')">Preview</button>' : ''}
         <button class="btn-secondary" onclick="clearDocument(${doc.id})" ${hasAnyFile(doc) ? '' : 'disabled'}>Clear Images</button>
       </div>
     </section>
@@ -327,6 +331,60 @@ function toggleSignature(docId, enabled) {
   scheduleDocEstimate(doc);
 }
 
+function renderSignScaleSlider(doc) {
+  const pct = ((doc.signScale * 100 - 30) / (300 - 30) * 100).toFixed(1) + '%';
+  const label = Math.round(doc.signScale * 100) + '%';
+  return [
+    '<div class="sign-scale-wrap" id="sign-scale-wrap-' + doc.id + '">',
+    '  <label class="ctrl-label" style="display:flex;align-items:center;gap:6px">',
+    '    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z"/><path d="M11 8v6M8 11h6"/></svg>',
+    '    Signature size &nbsp;<span id="signScaleLabel-' + doc.id + '">' + label + '</span>',
+    '  </label>',
+    '  <div class="slider-wrap" style="gap:8px">',
+    '    <span class="ctrl-label" style="font-size:10px">30%</span>',
+    '    <input type="range" id="signScale-' + doc.id + '" min="30" max="300" step="5" value="' + Math.round(doc.signScale * 100) + '"',
+    '      oninput="updateSignScale(' + doc.id + ', this)"',
+    '      style="--pct:' + pct + '">',
+    '    <span class="ctrl-label" style="font-size:10px">300%</span>',
+    '  </div>',
+    '  <div class="sign-scale-presets">',
+    '    <button class="sign-preset-btn" onclick="setSignScale(' + doc.id + ', 0.5)">Small</button>',
+    '    <button class="sign-preset-btn" onclick="setSignScale(' + doc.id + ', 1.0)">Normal</button>',
+    '    <button class="sign-preset-btn" onclick="setSignScale(' + doc.id + ', 1.5)">Large</button>',
+    '    <button class="sign-preset-btn" onclick="setSignScale(' + doc.id + ', 2.0)">X-Large</button>',
+    '  </div>',
+    '</div>',
+  ].join('\n');
+}
+
+function updateSignScale(docId, el) {
+  const doc = getDoc(docId);
+  if (!doc) return;
+  doc.signScale = Number(el.value) / 100;
+  updateSliderGradient(el);
+  const label = document.getElementById('signScaleLabel-' + docId);
+  if (label) label.textContent = Math.round(doc.signScale * 100) + '%';
+  invalidateDoc(doc);
+  scheduleDocEstimate(doc);
+  schedulePreviewDraw(doc);
+}
+
+function setSignScale(docId, scale) {
+  const doc = getDoc(docId);
+  if (!doc) return;
+  doc.signScale = scale;
+  const slider = document.getElementById('signScale-' + docId);
+  if (slider) {
+    slider.value = Math.round(scale * 100);
+    updateSliderGradient(slider);
+  }
+  const label = document.getElementById('signScaleLabel-' + docId);
+  if (label) label.textContent = Math.round(scale * 100) + '%';
+  invalidateDoc(doc);
+  scheduleDocEstimate(doc);
+  schedulePreviewDraw(doc);
+}
+
 function clearDocument(docId) {
   const doc = getDoc(docId);
   if (!doc) return;
@@ -372,6 +430,8 @@ function handleFile(file, docId, slot) {
       invalidateDoc(doc);
       renderDocuments();
       scheduleDocEstimate(doc);
+      // Redraw preview after image is fully decoded (renderDocuments fires before img.onload)
+      schedulePreviewDraw(doc);
     };
     img.onerror = () => toast('Could not read that image.', 'error');
     img.src = e.target.result;
@@ -402,6 +462,185 @@ function viewFull(docId, slot, e) {
 function closeLightbox(e) {
   if (e && e.target === document.getElementById('lightboxImg')) return;
   document.getElementById('lightbox').style.display = 'none';
+}
+
+// ── Canvas preview ────────────────────────────────────────────────────────
+
+// Mirrors buildDocPdfBlob layout geometry exactly, but draws onto a <canvas>.
+// A4 ratio: portrait 210:297, landscape 297:210
+function drawPreviewCanvas(doc, canvas) {
+  const isPort = doc.orientation === 'portrait';
+  // A4 mm dims
+  const [pw, ph] = isPort ? [210, 297] : [297, 210];
+
+  // Canvas pixel size — keep it proportional, capped at a reasonable render size
+  const BASE = isPort ? 420 : 594; // px for the longer side
+  const cW = isPort ? Math.round(BASE * 210 / 297) : BASE;
+  const cH = isPort ? BASE : Math.round(BASE * 210 / 297);
+
+  canvas.width  = cW;
+  canvas.height = cH;
+
+  const ctx = canvas.getContext('2d');
+
+  // White page background
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, cW, cH);
+
+  // Scale factor: mm → px
+  const scaleX = cW / pw;
+  const scaleY = cH / ph;
+
+  // ── Same constants as buildDocPdfBlob ──────────────────────────────────
+  const pagePad     = 12;
+  const gap         = 8;
+  const hasSign     = doc.signatureEnabled && doc.files.sign;
+  const signScale   = doc.signScale || 1.0;
+  // FIXED band — always the same size regardless of signScale.
+  // Sized for the maximum possible signature (300% = 40mm) so images NEVER move.
+  const SIGN_IMG_MAX = 40;   // mm — absolute ceiling for signature image height
+  const SIGN_BAND_H  = 46;   // mm — fixed: 40mm img + 6mm internal padding
+  const SIGN_GAP     = 4;    // mm — gap between image area bottom and band top
+
+  const imgAreaTop = pagePad;
+  // imgAreaBot is CONSTANT — doesn't change when signScale changes
+  const imgAreaBot = hasSign
+    ? ph - pagePad - SIGN_BAND_H - SIGN_GAP
+    : ph - pagePad;
+  const imgAreaH = imgAreaBot - imgAreaTop;
+  const imgAreaW = pw - pagePad * 2;
+
+  // Helper: draw one image into a box (mirrors addImageFit, top-anchored)
+  function drawImgInBox(imgEl, xMm, yMm, boxWmm, boxHmm) {
+    const ratio = imgEl.naturalWidth / imgEl.naturalHeight;
+    let wMm = boxWmm;
+    let hMm = wMm / ratio;
+    if (hMm > boxHmm) { hMm = boxHmm; wMm = hMm * ratio; }
+    const cxMm = xMm + (boxWmm - wMm) / 2; // centre horizontally
+    const cyMm = yMm;                        // top-anchored
+
+    ctx.drawImage(
+      imgEl,
+      cxMm * scaleX, cyMm * scaleY,
+      wMm  * scaleX, hMm  * scaleY
+    );
+  }
+
+  // ── Draw front & back ──────────────────────────────────────────────────
+  if (isPort) {
+    const halfH = (imgAreaH - gap) / 2;
+
+    // Tinted placeholder boxes if image not yet loaded
+    if (doc.files.front && doc.files.front.img.complete && doc.files.front.img.naturalWidth) {
+      drawImgInBox(doc.files.front.img, pagePad, imgAreaTop, imgAreaW, halfH);
+    } else {
+      ctx.fillStyle = 'rgba(249,107,63,0.10)';
+      ctx.fillRect(pagePad*scaleX, imgAreaTop*scaleY, imgAreaW*scaleX, halfH*scaleY);
+      ctx.fillStyle = 'rgba(249,107,63,0.35)';
+      ctx.font = `bold ${Math.round(10*scaleY)}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText('FRONT', (pagePad + imgAreaW/2)*scaleX, (imgAreaTop + halfH/2)*scaleY);
+    }
+
+    if (doc.files.back && doc.files.back.img.complete && doc.files.back.img.naturalWidth) {
+      drawImgInBox(doc.files.back.img, pagePad, imgAreaTop + halfH + gap, imgAreaW, halfH);
+    } else {
+      ctx.fillStyle = 'rgba(110,216,196,0.10)';
+      ctx.fillRect(pagePad*scaleX, (imgAreaTop+halfH+gap)*scaleY, imgAreaW*scaleX, halfH*scaleY);
+      ctx.fillStyle = 'rgba(24,168,122,0.35)';
+      ctx.font = `bold ${Math.round(10*scaleY)}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText('BACK', (pagePad + imgAreaW/2)*scaleX, (imgAreaTop+halfH+gap + halfH/2)*scaleY);
+    }
+  } else {
+    const halfW = (imgAreaW - gap) / 2;
+
+    if (doc.files.front && doc.files.front.img.complete && doc.files.front.img.naturalWidth) {
+      drawImgInBox(doc.files.front.img, pagePad, imgAreaTop, halfW, imgAreaH);
+    } else {
+      ctx.fillStyle = 'rgba(249,107,63,0.10)';
+      ctx.fillRect(pagePad*scaleX, imgAreaTop*scaleY, halfW*scaleX, imgAreaH*scaleY);
+      ctx.fillStyle = 'rgba(249,107,63,0.35)';
+      ctx.font = `bold ${Math.round(10*scaleX)}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText('FRONT', (pagePad + halfW/2)*scaleX, (imgAreaTop + imgAreaH/2)*scaleY);
+    }
+
+    if (doc.files.back && doc.files.back.img.complete && doc.files.back.img.naturalWidth) {
+      drawImgInBox(doc.files.back.img, pagePad + halfW + gap, imgAreaTop, halfW, imgAreaH);
+    } else {
+      ctx.fillStyle = 'rgba(110,216,196,0.10)';
+      ctx.fillRect((pagePad+halfW+gap)*scaleX, imgAreaTop*scaleY, halfW*scaleX, imgAreaH*scaleY);
+      ctx.fillStyle = 'rgba(24,168,122,0.35)';
+      ctx.font = `bold ${Math.round(10*scaleX)}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText('BACK', (pagePad+halfW+gap + halfW/2)*scaleX, (imgAreaTop + imgAreaH/2)*scaleY);
+    }
+  }
+
+  // ── Draw signature band ────────────────────────────────────────────────
+  if (hasSign) {
+    const bandTop = imgAreaBot + SIGN_GAP;
+    const bandH   = ph - pagePad - bandTop;
+
+    // Signature image
+    if (doc.files.sign && doc.files.sign.img.complete && doc.files.sign.img.naturalWidth) {
+      // Scale signature within fixed band — image grows/shrinks, band stays put
+      const sigImgH = Math.min(SIGN_IMG_MAX * signScale, SIGN_IMG_MAX);
+      const sigImgW = Math.min(63.5 * signScale, pw - pagePad * 2);
+      const sigRatio = doc.files.sign.img.naturalWidth / doc.files.sign.img.naturalHeight;
+      let sw = sigImgW, sh = sw / sigRatio;
+      if (sh > sigImgH) { sh = sigImgH; sw = sh * sigRatio; }
+      const sx = (pw - sw) / 2;
+      const sy = bandTop + (bandH - sh) / 2;
+      ctx.drawImage(doc.files.sign.img, sx*scaleX, sy*scaleY, sw*scaleX, sh*scaleY);
+    } else {
+      // Placeholder for signature band
+      ctx.fillStyle = 'rgba(24,168,122,0.08)';
+      ctx.fillRect(pagePad*scaleX, bandTop*scaleY, imgAreaW*scaleX, bandH*scaleY);
+      ctx.fillStyle = 'rgba(24,168,122,0.4)';
+      ctx.font = `bold ${Math.round(8*scaleY)}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText('SIGNATURE', (pw/2)*scaleX, (bandTop + bandH/2)*scaleY);
+    }
+  }
+
+  // ── Page border ────────────────────────────────────────────────────────
+  ctx.strokeStyle = 'rgba(30,44,64,0.12)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(0.5, 0.5, cW - 1, cH - 1);
+}
+
+// Schedules a canvas redraw on the next animation frame (debounced)
+const _previewTimers = {};
+function schedulePreviewDraw(doc) {
+  if (_previewTimers[doc.id]) cancelAnimationFrame(_previewTimers[doc.id]);
+  _previewTimers[doc.id] = requestAnimationFrame(() => {
+    delete _previewTimers[doc.id];
+    const canvas = document.getElementById('preview-canvas-' + doc.id);
+    if (canvas) drawPreviewCanvas(doc, canvas);
+  });
+}
+
+// Opens the canvas preview full-screen in the existing lightbox,
+// but renders it onto a larger off-screen canvas for sharpness.
+function openPreviewLightbox(docId) {
+  const doc = getDoc(docId);
+  if (!doc) return;
+
+  // Render at 2× resolution into an offscreen canvas, then show as image
+  const offscreen = document.createElement('canvas');
+  const isPort = doc.orientation === 'portrait';
+  const [pw, ph] = isPort ? [210, 297] : [297, 210];
+  const BASE = isPort ? 1400 : 1980;
+  offscreen.width  = isPort ? Math.round(BASE * 210 / 297) : BASE;
+  offscreen.height = isPort ? BASE : Math.round(BASE * 210 / 297);
+
+  drawPreviewCanvas(doc, offscreen);
+
+  const lb = document.getElementById('lightbox');
+  document.getElementById('lightboxImg').src = offscreen.toDataURL('image/jpeg', 0.96);
+  lb.style.display = 'flex';
 }
 
 function invalidateDoc(doc) {
@@ -485,25 +724,59 @@ async function buildDocPdfBlob(doc) {
   await waitFrame();
   const backData = await imageToJpeg(doc.files.back.img, quality, 2400);
 
-  const pagePad = 12;
-  const gap = 8;
-  const signBand = doc.signatureEnabled && doc.files.sign ? 34 : 0;
-  const contentH = ph - (pagePad * 2) - signBand - (signBand ? gap : 0);
+  // ── Layout constants ──────────────────────────────────────────────────────
+  const pagePad = 12;   // outer margin on all sides (mm)
+  const gap     = 8;    // gap between front and back images (mm)
+  const hasSign = doc.signatureEnabled && doc.files.sign;
 
+  // Signature band: a fixed-height strip at the bottom of the page.
+  // This zone is ALWAYS fully reserved when a signature exists —
+  // front/back images are hard-clipped to never enter it.
+  const signScale    = doc.signScale || 1.0;
+  // FIXED band — always the same size regardless of signScale.
+  // Sized for maximum signature (300%) so images NEVER shrink when scale changes.
+  const SIGN_IMG_MAX = 40;   // mm — absolute ceiling for signature image height
+  const SIGN_BAND_H  = 46;   // mm — fixed: 40mm img + 6mm internal padding
+  const SIGN_GAP     = 4;    // mm — gap between image area bottom and band top
+
+  // The usable rectangle for front + back images — CONSTANT, never changes
+  const imgAreaTop  = pagePad;
+  const imgAreaBot  = hasSign
+    ? ph - pagePad - SIGN_BAND_H - SIGN_GAP  // hard ceiling — images STOP here
+    : ph - pagePad;
+  const imgAreaH    = imgAreaBot - imgAreaTop;  // guaranteed free of signature
+  const imgAreaW    = pw - pagePad * 2;
+
+  // ── Draw front & back inside the strictly-bounded image area ─────────────
   if (doc.orientation === 'portrait') {
-    const halfH = (contentH - gap) / 2;
-    addImageFit(pdf, frontData, doc.files.front.img, pagePad, pagePad, pw - pagePad * 2, halfH);
-    addImageFit(pdf, backData, doc.files.back.img, pagePad, pagePad + halfH + gap, pw - pagePad * 2, halfH);
+    const halfH = (imgAreaH - gap) / 2;
+    addImageFit(pdf, frontData, doc.files.front.img,
+      pagePad, imgAreaTop,
+      imgAreaW, halfH);
+    addImageFit(pdf, backData, doc.files.back.img,
+      pagePad, imgAreaTop + halfH + gap,
+      imgAreaW, halfH);
   } else {
-    const halfW = (pw - pagePad * 2 - gap) / 2;
-    addImageFit(pdf, frontData, doc.files.front.img, pagePad, pagePad, halfW, contentH);
-    addImageFit(pdf, backData, doc.files.back.img, pagePad + halfW + gap, pagePad, halfW, contentH);
+    const halfW = (imgAreaW - gap) / 2;
+    addImageFit(pdf, frontData, doc.files.front.img,
+      pagePad, imgAreaTop,
+      halfW, imgAreaH);
+    addImageFit(pdf, backData, doc.files.back.img,
+      pagePad + halfW + gap, imgAreaTop,
+      halfW, imgAreaH);
   }
 
-  if (doc.signatureEnabled && doc.files.sign) {
+  // ── Draw signature inside its reserved band — never above imgAreaBot ─────
+  if (hasSign) {
     await waitFrame();
     const signData = await imageToJpeg(doc.files.sign.img, quality, 1200);
-    addSignature(pdf, signData, doc.files.sign.img, pw, ph, pagePad);
+
+    // Signature band spans from imgAreaBot + SIGN_GAP to ph - pagePad
+    const bandTop = imgAreaBot + SIGN_GAP;
+    const bandH   = ph - pagePad - bandTop;   // remaining space to bottom margin
+
+    addSignature(pdf, signData, doc.files.sign.img,
+      pw, bandTop, bandH, SIGN_IMG_MAX, pagePad, doc.signScale || 1.0);
   }
 
   return pdf.output('blob');
@@ -529,35 +802,41 @@ function imageToJpeg(imgEl, quality, maxDimension) {
   });
 }
 
+// Images are centered horizontally but anchored to the TOP of their slot
+// so they never spill downward beyond maxH.
 function addImageFit(pdf, dataUrl, imgEl, x, y, maxW, maxH) {
   const ratio = imgEl.naturalWidth / imgEl.naturalHeight;
   let w = maxW;
   let h = w / ratio;
-  if (h > maxH) {
+  if (h > maxH) {        // too tall → constrain by height
     h = maxH;
     w = h * ratio;
   }
-  const cx = x + (maxW - w) / 2;
-  const cy = y + (maxH - h) / 2;
+  const cx = x + (maxW - w) / 2;  // centre horizontally
+  const cy = y;                    // anchor to the TOP — never bleeds below y + maxH
   pdf.addImage(dataUrl, 'JPEG', cx, cy, w, h, undefined, 'FAST');
 }
 
-function addSignature(pdf, dataUrl, imgEl, pageW, pageH, pagePad) {
-  // 2.5 inches = 63.5mm width; 16:9 ratio gives height = 63.5 * 9/16 ≈ 35.72mm
-  const targetW = 63.5;
-  const targetH = targetW * (9 / 16); // ~35.72mm
+// Signature is centred inside the reserved band.
+// bandTop   – y coordinate where the band begins (guaranteed below all images)
+// bandH     – total height of the band in mm
+// maxImgH   – max pixel height the signature image may occupy
+function addSignature(pdf, dataUrl, imgEl, pageW, bandTop, bandH, maxImgH, pagePad, signScale) {
+  signScale = signScale || 1.0;
+  // maxImgH is the FIXED ceiling (40mm). Scale controls how much of that ceiling is used.
+  // Width: 63.5mm base × scale, capped to page content width.
+  // Height: maxImgH × scale, capped to maxImgH (the fixed band limit).
+  const MAX_W = Math.min(63.5 * signScale, pageW - pagePad * 2);
+  const MAX_H = Math.min(maxImgH * signScale, maxImgH);
+
   const ratio = imgEl.naturalWidth / imgEl.naturalHeight;
-  let w = targetW;
+  let w = MAX_W;
   let h = w / ratio;
-  // Cap height to the 16:9 target; if image is wider, constrain by height instead
-  if (h > targetH) {
-    h = targetH;
-    w = h * ratio;
-  }
+  if (h > MAX_H) { h = MAX_H; w = h * ratio; }
+
+  // Centre horizontally, centre vertically inside the band
   const x = (pageW - w) / 2;
-  // Place signature higher — 20mm above the page bottom (was pagePad ~12mm)
-  const bottomMargin = pagePad + 20;
-  const y = pageH - bottomMargin - h;
+  const y = bandTop + (bandH - h) / 2;
   pdf.addImage(dataUrl, 'JPEG', x, y, w, h, undefined, 'FAST');
 }
 
@@ -710,6 +989,13 @@ function pendingSendFile() {
 }
 
 function doSendToSlot(docId, slot) {
+  const doc = getDoc(docId);
+  if (!doc) return;
+  // Guard: refuse to overwrite an already-occupied slot
+  if (doc.files[slot]) {
+    toast(`${SLOT_META[slot].label} is already occupied. Remove the existing image first.`, 'error');
+    return;
+  }
   const file = pendingSendFile();
   if (!file) return;
   document.getElementById('slotPicker').style.display = 'none';
@@ -1166,8 +1452,8 @@ if ('serviceWorker' in navigator) {
   });
 }
 
-// Init
+// Init — start with 2 document cards
 document.addEventListener('DOMContentLoaded', () => {
   addDocument();
+  addDocument();
 });
-
