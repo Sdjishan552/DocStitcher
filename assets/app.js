@@ -648,6 +648,8 @@ function drawPreviewCanvas(doc, canvas) {
   const cH = isPort ? BASE : Math.round(BASE*210/297);
   canvas.width=cW; canvas.height=cH;
   const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
   ctx.fillStyle='#fff'; ctx.fillRect(0,0,cW,cH);
   const scaleX=cW/pw, scaleY=cH/ph;
   const pagePad=12, gap=8;
@@ -671,6 +673,7 @@ function drawPreviewCanvas(doc, canvas) {
   }
 
   if (isPort) {
+    // One-sided: use full imgAreaH. Two-sided: split into halves
     const useH = doc.oneSided ? imgAreaH : (imgAreaH-gap)/2;
     const startY = imgAreaTop;
     if (doc.files.front?.img?.complete && doc.files.front.img.naturalWidth)
@@ -683,6 +686,7 @@ function drawPreviewCanvas(doc, canvas) {
       else placeholder(pagePad, startY+useH+gap, imgAreaW, useH, 'BACK','rgba(110,216,196,0.10)','rgba(24,168,122,0.35)');
     }
   } else {
+    // Landscape: one-sided fills full width, two-sided splits
     const useW = doc.oneSided ? imgAreaW : (imgAreaW-gap)/2;
     if (doc.files.front?.img?.complete && doc.files.front.img.naturalWidth)
       drawImgInBox(doc.files.front.img, pagePad, imgAreaTop, useW, imgAreaH);
@@ -784,10 +788,10 @@ async function buildDocPdfBlob(doc) {
   const quality=Math.max(0.1,Math.min(1,doc.quality/100));
   const pdf=new jsPDF({orientation:doc.orientation,unit:'mm',format:'a4',compress:true});
 
-  const frontData=await imageToJpeg(doc.files.front.img,quality,2400);
+  const frontData=await imageToJpeg(doc.files.front.img,quality,3200);
   await waitFrame();
   let backData=null;
-  if(!doc.oneSided&&doc.files.back) { backData=await imageToJpeg(doc.files.back.img,quality,2400); }
+  if(!doc.oneSided&&doc.files.back) { backData=await imageToJpeg(doc.files.back.img,quality,3200); }
 
   const pagePad=12,gap=8;
   const hasSign=doc.signatureEnabled&&doc.files.sign;
@@ -808,7 +812,7 @@ async function buildDocPdfBlob(doc) {
 
   if(hasSign) {
     await waitFrame();
-    const signData=await imageToJpeg(doc.files.sign.img,quality,1200);
+    const signData=await imageToJpeg(doc.files.sign.img,quality,2000);
     const bandTop=imgAreaBot;
     const bandH=ph-pagePad-bandTop;
     addSignatureWithOffset(pdf,signData,doc.files.sign.img,pw,bandTop,bandH,SIGN_IMG_MAX,pagePad,doc.signScale||1.0,doc.signOffsetX||0,doc.signOffsetY||0);
@@ -819,10 +823,11 @@ async function buildDocPdfBlob(doc) {
 function imageToJpeg(imgEl,quality,maxDim) {
   return new Promise(resolve=>{
     const naturalW=imgEl.naturalWidth,naturalH=imgEl.naturalHeight;
+    // Use full resolution if image fits, only scale down if exceeds maxDim
     const scale=Math.min(1,maxDim/Math.max(naturalW,naturalH));
     const w=Math.max(1,Math.round(naturalW*scale)),h=Math.max(1,Math.round(naturalH*scale));
     const c=document.createElement('canvas'); c.width=w; c.height=h;
-    const ctx=c.getContext('2d',{alpha:false});
+    const ctx=c.getContext('2d',{alpha:false,willReadFrequently:false});
     ctx.fillStyle='#fff'; ctx.fillRect(0,0,w,h);
     ctx.imageSmoothingEnabled=true; ctx.imageSmoothingQuality='high';
     ctx.drawImage(imgEl,0,0,w,h);
@@ -872,10 +877,11 @@ async function downloadDocument(docId) {
       const blob = await ensurePdf(doc);
       saveBlob(blob, cleanFilename(doc.name)+'.pdf');
     } else {
-      // Render to canvas then export as image
+      // Render to canvas then export as image — use high-res canvas for quality
       const off = document.createElement('canvas');
       const isPort = doc.orientation==='portrait';
-      const BASE = isPort ? 2480 : 3508;
+      // A4 at 300 DPI: portrait = 2480×3508, landscape = 3508×2480
+      const BASE = isPort ? 3508 : 4961;
       off.width  = isPort ? Math.round(BASE*210/297) : BASE;
       off.height = isPort ? BASE : Math.round(BASE*210/297);
       drawPreviewCanvas(doc, off);
@@ -908,7 +914,8 @@ async function downloadAllDocuments() {
       } else {
         const off=document.createElement('canvas');
         const isPort=doc.orientation==='portrait';
-        const BASE=isPort?2480:3508;
+        // A4 at 300 DPI for high quality
+        const BASE=isPort?3508:4961;
         off.width=isPort?Math.round(BASE*210/297):BASE;
         off.height=isPort?BASE:Math.round(BASE*210/297);
         drawPreviewCanvas(doc,off);
