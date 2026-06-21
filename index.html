@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head> 
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#fffaf5" />
+  <meta name="description" content="Combine front and back scans into A4 print-ready PDFs. 100% local - no server uploads." />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="DocStitcher" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <title>Document Stitcher</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,300;1,400&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <link rel="stylesheet" href="assets/style.css" />
+  <style>
+    /* Language toggle button */
+    #langToggleBtn {
+      font-size: 12px;
+      font-weight: 600;
+      padding: 5px 13px;
+      border-radius: 20px;
+      border: 1.5px solid var(--accent, #f96b3f);
+      background: transparent;
+      color: var(--accent, #f96b3f);
+      cursor: pointer;
+      letter-spacing: 0.3px;
+      transition: background 0.18s, color 0.18s;
+      white-space: nowrap;
+    }
+    #langToggleBtn:hover {
+      background: var(--accent, #f96b3f);
+      color: #fff;
+    }
+  </style>
+</head>
+<body>
+  <div class="noise-bg"></div>
+
+  <!-- ===== MAIN APP ===== -->
+  <div id="app-main">
+    <div class="page-wrap app-shell">
+
+      <header class="header fade-up">
+        <div class="header-brand">
+          <div class="brand-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="3" width="9" height="13" rx="2"/><rect x="13" y="3" width="9" height="13" rx="2"/><path d="M2 20h20"/>
+            </svg>
+          </div>
+          <div>
+            <h1 class="brand-name" data-i18n="brandName">Document Stitcher 7.0</h1>
+            <p class="brand-tagline" data-i18n="brandTagline">A4 PDF maker · PDF/JPG/PNG output · No uploads · 100% local</p>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <button id="langToggleBtn" onclick="Lang.toggle()" title="Switch Language / ভাষা পরিবর্তন করুন">বাংলা</button>
+          <button class="btn-ghost" id="helpBtn" onclick="toggleHelp()" data-i18n="helpBtn">Help</button>
+        </div>
+      </header>
+
+      <div class="glow-line fade-up fade-up-1"></div>
+
+      <div id="helpPanel" class="help-panel" style="display:none">
+        <h3 data-i18n="helpTitle">How to use</h3>
+        <ol>
+          <li data-i18n="helpStep1">Add a two-sided or one-sided document card using the buttons below.</li>
+          <li data-i18n="helpStep2">Upload front (and back for two-sided). PDFs are auto-converted to images.</li>
+          <li data-i18n="helpStep3">Enable the signature checkbox to add a signature image. Use the <strong>🎯 Place Signature</strong> button to position it precisely using arrow keys (hold Shift for bigger steps).</li>
+          <li data-i18n="helpStep4">Click Download and choose PDF, JPG, or PNG output format.</li>
+          <li data-i18n="helpStep5">Use Single-Doc Tools (bottom right) to crop, rotate, flip, compress and convert any image or PDF all at once before sending it here.</li>
+        </ol>
+      </div>
+
+      <section class="batch-toolbar fade-up fade-up-2">
+        <div>
+          <div class="section-label" data-i18n="sectionDocuments">Documents</div>
+          <p class="toolbar-sub"><span id="readyCount">0 ready</span> · A4 · PDF / JPG / PNG output</p>
+        </div>
+        <div class="toolbar-actions">
+          <button class="btn-secondary" onclick="addDocument(false)" data-i18n="btnTwoSided">+ Two-Sided</button>
+          <button class="btn-secondary" onclick="addDocument(true)" data-i18n="btnOneSided">+ One-Sided</button>
+          <button class="btn-primary" id="downloadAllBtn" onclick="downloadAllDocuments()" disabled data-i18n="btnDownloadAll">Download All</button>
+        </div>
+      </section>
+
+      <div id="documentsList" class="documents-list fade-up fade-up-3"></div>
+
+    </div>
+  </div>
+
+  <!-- ===== SINGLE-DOC TOOLS PAGE ===== -->
+  <div id="sdt-page" style="display:none">
+    <div class="page-wrap">
+      <div class="topbar fade-up">
+        <button class="back-btn" onclick="sdtClose()">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M9 11L5 7l4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span data-i18n="btnBackToStitcher">Back to Stitcher</span>
+        </button>
+        <span class="badge badge-ready" data-i18n="sdtBadge">Single-Doc Tools</span>
+      </div>
+
+      <div style="margin-top:18px" class="fade-up">
+        <h1 class="page-title" data-i18n="sdtPageTitle">Single-Side Tools</h1>
+        <p class="page-sub" data-i18n="sdtPageSub">Edit image or PDF: crop, rotate, flip, compress, convert — all at once. 100% local.</p>
+      </div>
+      <div class="glow-line fade-up" style="margin-bottom:28px"></div>
+
+      <div class="tab-bar fade-up">
+        <button class="tab-btn active" onclick="sdt.switchTab('multitool',this)" data-i18n="tabMultiTool">✨ Multi-Tool Editor</button>
+        <button class="tab-btn" onclick="sdt.switchTab('watermark',this)" data-i18n="tabWatermark">Watermark</button>
+      </div>
+
+      <!-- MULTI-TOOL TAB -->
+      <div class="tool-section active" id="tab-multitool">
+        <div class="card" style="padding:28px">
+          <div class="card-title" data-i18n="mtCardTitle">Multi-Tool Image / PDF Editor</div>
+          <p style="font-size:12.5px;color:var(--text-muted);margin-bottom:16px" data-i18n="mtCardSub">Upload one image or PDF and apply crop, rotate, flip, compress &amp; convert — all in one place.</p>
+
+          <div class="drop-zone sdt-drop" id="mtDrop" onclick="document.getElementById('mtInput').click()"
+               ondragover="sdt.dzDrag(event,'mtDrop')" ondragleave="sdt.dzLeave('mtDrop')" ondrop="sdt.dzDrop(event,'mtDrop',sdt.loadMultiToolFile)">
+            <input type="file" id="mtInput" accept="image/*,.pdf,application/pdf" onchange="sdt.loadMultiToolFile(this.files[0])">
+            <div id="mtPlaceholder" class="sdt-placeholder">
+              <div class="drop-icon">🖼</div>
+              <div class="drop-label" data-i18n="mtDropLabel">Click or drag image / PDF here</div>
+              <div class="drop-hint" data-i18n="mtDropHint">JPG, PNG, WebP, PDF supported</div>
+            </div>
+          </div>
+
+          <div id="mtEditor" style="display:none;margin-top:20px">
+
+            <!-- ROTATE / FLIP -->
+            <div class="mt-section-label" data-i18n="labelRotateFlip">Rotate &amp; Flip</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
+              <button class="btn-secondary" onclick="sdt.mtRotate(-90)" data-i18n="btnRotateL">↺ 90° Left</button>
+              <button class="btn-secondary" onclick="sdt.mtRotate(90)" data-i18n="btnRotateR">↻ 90° Right</button>
+              <button class="btn-secondary" onclick="sdt.mtRotate(180)" data-i18n="btnRotate180">↕ 180°</button>
+              <button class="btn-ghost" onclick="sdt.mtFlip('h')" data-i18n="btnFlipH">⇆ Flip H</button>
+              <button class="btn-ghost" onclick="sdt.mtFlip('v')" data-i18n="btnFlipV">⇅ Flip V</button>
+            </div>
+
+            <!-- CROP -->
+            <div class="mt-section-label" data-i18n="labelCrop">Crop — drag on the image below to select area</div>
+            <div class="crop-canvas-wrap" id="mtCropWrap" style="margin-bottom:10px; min-height:320px; background:var(--surface-2); border-radius:12px; display:flex; align-items:center; justify-content:center;">
+              <canvas id="mtCropCanvas" style="max-width:100%; border-radius:10px; cursor:crosshair; display:block; width:100%; height:auto;"></canvas>
+            </div>
+            <!-- Crop size readout -->
+            <div id="mtCropInfo" style="font-size:11.5px;color:var(--text-muted);margin-bottom:8px;min-height:18px"></div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px">
+              <button class="btn-secondary" id="mtApplyCropBtn" onclick="sdt.mtApplyCrop()" data-i18n="btnApplyCrop">✂ Apply Crop</button>
+              <button class="btn-ghost" onclick="sdt.mtClearCrop()" data-i18n="btnClearCrop">Clear Crop</button>
+            </div>
+
+            <!-- SET IMAGE SIZE -->
+            <div class="mt-section-label">📐 Set Output Size (optional)</div>
+            <div class="size-input-grid" style="margin-bottom:18px">
+              <div class="size-unit-group">
+                <label class="ctrl-label">Width</label>
+                <div style="display:flex;gap:6px;align-items:center">
+                  <input type="number" class="size-dim-input" id="mtSizeW" placeholder="e.g. 3.5" step="0.1" min="0.1" oninput="sdt.mtSizeChanged()">
+                  <select class="ctrl-select size-unit-select" id="mtSizeUnitW" onchange="sdt.mtSizeUnitChanged('w')">
+                    <option value="cm">cm</option>
+                    <option value="mm">mm</option>
+                    <option value="in">in</option>
+                    <option value="px">px</option>
+                  </select>
+                </div>
+              </div>
+              <div class="size-unit-group" style="display:flex;align-items:center;justify-content:center;padding-top:16px">
+                <span style="font-size:18px;color:var(--text-muted)">×</span>
+              </div>
+              <div class="size-unit-group">
+                <label class="ctrl-label">Height</label>
+                <div style="display:flex;gap:6px;align-items:center">
+                  <input type="number" class="size-dim-input" id="mtSizeH" placeholder="e.g. 4.5" step="0.1" min="0.1" oninput="sdt.mtSizeChanged()">
+                  <select class="ctrl-select size-unit-select" id="mtSizeUnitH" onchange="sdt.mtSizeUnitChanged('h')">
+                    <option value="cm">cm</option>
+                    <option value="mm">mm</option>
+                    <option value="in">in</option>
+                    <option value="px">px</option>
+                  </select>
+                </div>
+              </div>
+              <div class="size-unit-group" style="display:flex;align-items:flex-end;padding-bottom:2px">
+                <div style="display:flex;gap:6px;flex-wrap:wrap">
+                  <button class="btn-secondary size-preset-btn" onclick="sdt.mtApplySizePreset(3.5,4.5,'cm')">Passport 3.5×4.5cm</button>
+                  <button class="btn-secondary size-preset-btn" onclick="sdt.mtApplySizePreset(2,2,'in')">2×2 in (US)</button>
+                  <button class="btn-secondary size-preset-btn" onclick="sdt.mtApplySizePreset(35,45,'mm')">35×45mm (EU)</button>
+                  <button class="btn-ghost size-preset-btn" onclick="sdt.mtClearSize()">Clear Size</button>
+                </div>
+              </div>
+            </div>
+            <div id="mtSizeInfo" style="font-size:11.5px;color:var(--text-muted);margin-bottom:14px;min-height:18px"></div>
+
+            <!-- COMPRESS / CONVERT -->
+            <div class="mt-section-label" data-i18n="labelCompressConvert">Compress &amp; Convert</div>
+            <div class="ctrl-row" style="margin-bottom:16px">
+              <div class="ctrl-group">
+                <label class="ctrl-label" data-i18n="labelOutputFmt">Output Format</label>
+                <select class="ctrl-select" id="mtFmt" onchange="sdt.mtSetFormat(this.value)">
+                  <option value="jpeg">JPEG (best compression)</option>
+                  <option value="webp">WebP (modern, tiny)</option>
+                  <option value="png">PNG (lossless)</option>
+                </select>
+              </div>
+              <div class="ctrl-group">
+                <label class="ctrl-label"><span data-i18n="labelQualMt">Quality</span> <span id="mtQualLabel">85%</span></label>
+                <div class="slider-wrap">
+                  <input type="range" id="mtQual" min="1" max="100" value="85" oninput="sdt.mtSetQuality(this.value)" style="--pct:85%">
+                </div>
+              </div>
+              <div class="ctrl-group">
+                <label class="ctrl-label" data-i18n="labelMaxWidth">Max Width (px)</label>
+                <div class="slider-wrap">
+                  <input type="range" id="mtMaxW" min="0" max="4000" step="100" value="0" oninput="sdt.mtSetMaxW(this.value)" style="--pct:0%">
+                  <span class="slider-val" id="mtMaxWLabel">Original</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- STATS -->
+            <div class="stats-bar" style="margin-bottom:18px">
+              <div class="stat-item"><span class="stat-label">Original Size</span><span class="stat-val" id="mtOrigSize">-</span></div>
+              <div class="stat-item"><span class="stat-label">Original Dims</span><span class="stat-val" id="mtOrigDims">-</span></div>
+              <div class="stat-item"><span class="stat-label">Output Size</span><span class="stat-val orange" id="mtNewSize">-</span></div>
+              <div class="stat-item"><span class="stat-label">Output Dims</span><span class="stat-val" id="mtNewDims">-</span></div>
+            </div>
+
+            <!-- PREVIEW -->
+            <div class="output-label" data-i18n="labelPreviewOut">Live Preview</div>
+            <div class="output-preview-wrap" style="margin-bottom:16px">
+              <img id="mtPreview" alt="processed output" style="max-height:400px">
+            </div>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:28px">
+              <button class="btn-primary" onclick="sdt.mtDownload()" data-i18n="btnDownloadMt">⬇ Download</button>
+              <button class="btn-secondary" onclick="sdt.mtSendToApp()" data-i18n="btnSendToStitcher">→ Send to Stitcher</button>
+              <button class="btn-secondary" onclick="sdt.mtReset()">↺ Reset All</button>
+              <button class="btn-ghost" onclick="sdt.clearMultiTool()" data-i18n="btnClearMt">Clear</button>
+            </div>
+
+            <!-- ===== PASSPORT / A4 LAYOUT SECTION ===== -->
+            <div class="passport-section-divider">
+              <span>🪪 Passport Photo / A4 Print Layout</span>
+              <span class="passport-optional-badge">Optional</span>
+            </div>
+            <p style="font-size:12.5px;color:var(--text-muted);margin-bottom:16px">Place this image on an A4 page for printing — like a photocopy shop. Set size, count, and orientation, then download as PDF.</p>
+
+            <!-- ROW 1: Page orientation + Image count -->
+            <div class="ctrl-row" style="margin-bottom:14px;gap:20px;flex-wrap:wrap">
+              <div class="ctrl-group">
+                <label class="ctrl-label">📄 A4 Page Orientation</label>
+                <div style="display:flex;gap:8px">
+                  <button class="a4-orient-btn active" id="a4OrientPortrait" onclick="sdt.setA4Orient('portrait')">
+                    <svg width="12" height="16" viewBox="0 0 12 16" fill="none"><rect x="0.5" y="0.5" width="11" height="15" rx="1.5" stroke="currentColor" stroke-width="1.2"/></svg>
+                    Portrait
+                  </button>
+                  <button class="a4-orient-btn" id="a4OrientLandscape" onclick="sdt.setA4Orient('landscape')">
+                    <svg width="16" height="12" viewBox="0 0 16 12" fill="none"><rect x="0.5" y="0.5" width="15" height="11" rx="1.5" stroke="currentColor" stroke-width="1.2"/></svg>
+                    Landscape
+                  </button>
+                </div>
+              </div>
+
+              <div class="ctrl-group">
+                <label class="ctrl-label">🔢 Number of Photos</label>
+                <div style="display:flex;gap:8px;align-items:center">
+                  <button class="a4-count-btn" onclick="sdt.a4CountDelta(-1)">−</button>
+                  <span id="a4CountLabel" style="font-size:20px;font-weight:800;min-width:32px;text-align:center;color:var(--accent)">4</span>
+                  <button class="a4-count-btn" onclick="sdt.a4CountDelta(1)">+</button>
+                </div>
+              </div>
+
+              <div class="ctrl-group">
+                <label class="ctrl-label">↔ Gap Between Photos</label>
+                <div style="display:flex;gap:6px;align-items:center">
+                  <input type="number" id="a4Gap" value="2" step="0.5" min="0" max="15" style="width:64px;padding:6px 8px;border:1.5px solid var(--border);border-radius:8px;font-size:13px" oninput="sdt.a4Preview()">
+                  <span class="ctrl-label">mm</span>
+                </div>
+              </div>
+
+              <div class="ctrl-group">
+                <label class="ctrl-label">📐 Page Margin</label>
+                <div style="display:flex;gap:6px;align-items:center">
+                  <input type="number" id="a4Margin" value="8" step="0.5" min="3" max="25" style="width:64px;padding:6px 8px;border:1.5px solid var(--border);border-radius:8px;font-size:13px" oninput="sdt.a4Preview()">
+                  <span class="ctrl-label">mm</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- ROW 2: Corner anchor + Image fill direction -->
+            <div class="ctrl-row" style="margin-bottom:18px;gap:20px;flex-wrap:wrap;align-items:flex-start">
+              <div class="ctrl-group">
+                <label class="ctrl-label">📌 Start Placing From</label>
+                <div class="a4-corner-grid">
+                  <button class="a4-corner-btn active" id="a4Corner_tl" onclick="sdt.setA4Corner('tl')" title="Top-Left">↖ Top-Left</button>
+                  <button class="a4-corner-btn"        id="a4Corner_tr" onclick="sdt.setA4Corner('tr')" title="Top-Right">↗ Top-Right</button>
+                  <button class="a4-corner-btn"        id="a4Corner_bl" onclick="sdt.setA4Corner('bl')" title="Bottom-Left">↙ Bot-Left</button>
+                  <button class="a4-corner-btn"        id="a4Corner_br" onclick="sdt.setA4Corner('br')" title="Bottom-Right">↘ Bot-Right</button>
+                </div>
+              </div>
+
+              <div class="ctrl-group">
+                <label class="ctrl-label">🔀 Fill Photos</label>
+                <div style="display:flex;gap:8px;flex-direction:column">
+                  <button class="a4-dir-btn active" id="a4DirRow" onclick="sdt.setA4ImgDir('row')">
+                    <svg width="32" height="18" viewBox="0 0 32 18" fill="none">
+                      <rect x="1" y="1" width="8" height="7" rx="1" fill="currentColor" opacity="0.8"/>
+                      <rect x="12" y="1" width="8" height="7" rx="1" fill="currentColor" opacity="0.5"/>
+                      <rect x="23" y="1" width="8" height="7" rx="1" fill="currentColor" opacity="0.3"/>
+                      <rect x="1" y="10" width="8" height="7" rx="1" fill="currentColor" opacity="0.2"/>
+                      <path d="M4 4 L28 4" stroke="currentColor" stroke-width="0.8" stroke-dasharray="3 2" opacity="0.4"/>
+                    </svg>
+                    Row by Row (→ then ↓)
+                  </button>
+                  <button class="a4-dir-btn" id="a4DirCol" onclick="sdt.setA4ImgDir('col')">
+                    <svg width="32" height="18" viewBox="0 0 32 18" fill="none">
+                      <rect x="1" y="1" width="8" height="7" rx="1" fill="currentColor" opacity="0.8"/>
+                      <rect x="1" y="10" width="8" height="7" rx="1" fill="currentColor" opacity="0.5"/>
+                      <rect x="12" y="1" width="8" height="7" rx="1" fill="currentColor" opacity="0.3"/>
+                      <rect x="12" y="10" width="8" height="7" rx="1" fill="currentColor" opacity="0.2"/>
+                      <path d="M5 2 L5 16" stroke="currentColor" stroke-width="0.8" stroke-dasharray="3 2" opacity="0.4"/>
+                    </svg>
+                    Column by Column (↓ then →)
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- A4 Preview canvas -->
+            <div class="a4-preview-outer">
+              <div class="a4-preview-label">Live A4 Page Preview</div>
+              <div id="a4PreviewWrap" class="a4-preview-wrap">
+                <canvas id="a4PreviewCanvas"></canvas>
+              </div>
+              <div id="a4LayoutInfo" style="font-size:11.5px;color:var(--text-muted);margin-top:8px;text-align:center"></div>
+            </div>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px">
+              <button class="btn-primary" onclick="sdt.downloadA4PDF()" style="background:linear-gradient(135deg,#6c63ff,#4a90d9);box-shadow:0 6px 20px rgba(108,99,255,0.35)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle;margin-right:5px"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 18 15 15"/></svg>
+                Download A4 PDF
+              </button>
+              <button class="btn-secondary" onclick="sdt.a4Preview()">🔄 Refresh Preview</button>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      <!-- WATERMARK TAB -->
+      <div class="tool-section" id="tab-watermark">
+        <div class="card" style="padding:28px">
+          <div class="card-title" data-i18n="wmCardTitle">Text Watermark</div>
+          <div class="drop-zone sdt-drop" id="wmDrop" onclick="document.getElementById('wmInput').click()"
+               ondragover="sdt.dzDrag(event,'wmDrop')" ondragleave="sdt.dzLeave('wmDrop')" ondrop="sdt.dzDrop(event,'wmDrop',sdt.loadWmImg)">
+            <input type="file" id="wmInput" accept="image/*" onchange="sdt.loadWmImg(this.files[0])">
+            <div id="wmPlaceholder" class="sdt-placeholder">
+              <div class="drop-icon">Watermark</div>
+              <div class="drop-label" data-i18n="wmDropLabel">Click or drag image here</div>
+              <div class="drop-hint" data-i18n="wmDropHint">Add a custom text watermark</div>
+            </div>
+          </div>
+          <div id="wmEditor" style="display:none;margin-top:20px">
+            <div style="margin-bottom:14px">
+              <label class="ctrl-label" style="margin-bottom:8px" data-i18n="labelWmText">Watermark Text</label>
+              <input type="text" class="wm-input" id="wmText" value="CONFIDENTIAL" oninput="sdt.updateWmPreview()">
+            </div>
+            <div class="ctrl-row">
+              <div class="ctrl-group">
+                <label class="ctrl-label" data-i18n="labelWmPos">Position</label>
+                <select class="ctrl-select" id="wmPos" onchange="sdt.updateWmPreview()">
+                  <option value="center" data-i18n="wmPosCenter">Center</option>
+                  <option value="tile" data-i18n="wmPosTile">Tiled</option>
+                  <option value="topleft" data-i18n="wmPosTopLeft">Top Left</option>
+                  <option value="topright" data-i18n="wmPosTopRight">Top Right</option>
+                  <option value="bottomleft" data-i18n="wmPosBotLeft">Bottom Left</option>
+                  <option value="bottomright" data-i18n="wmPosBotRight">Bottom Right</option>
+                </select>
+              </div>
+              <div class="ctrl-group">
+                <label class="ctrl-label"><span data-i18n="labelWmSize">Font Size</span> <span id="wmSizeLabel">48px</span></label>
+                <div class="slider-wrap"><input type="range" id="wmSize" min="12" max="200" value="48" oninput="sdt.updateWmSizeLabel();sdt.updateWmPreview()" style="--pct:22%"></div>
+              </div>
+              <div class="ctrl-group">
+                <label class="ctrl-label"><span data-i18n="labelWmOp">Opacity</span> <span id="wmOpLabel">40%</span></label>
+                <div class="slider-wrap"><input type="range" id="wmOp" min="5" max="100" value="40" oninput="sdt.updateWmOpLabel();sdt.updateWmPreview()" style="--pct:40%"></div>
+              </div>
+            </div>
+            <div class="ctrl-row" style="margin-top:14px">
+              <div class="ctrl-group">
+                <label class="ctrl-label"><span data-i18n="labelWmRot">Rotation</span> <span id="wmRotLabel">-30 deg</span></label>
+                <div class="slider-wrap"><input type="range" id="wmRot" min="-90" max="90" value="-30" oninput="sdt.updateWmRotLabel();sdt.updateWmPreview()" style="--pct:33%"></div>
+              </div>
+              <div class="ctrl-group">
+                <label class="ctrl-label" data-i18n="labelWmColor">Colour</label>
+                <div style="display:flex;align-items:center;gap:10px">
+                  <input type="color" id="wmColor" value="#ff7b54" onchange="sdt.updateWmPreview()">
+                  <span style="font-size:13px;color:var(--text-muted)" data-i18n="wmColorPick">Pick colour</span>
+                </div>
+              </div>
+            </div>
+            <div style="margin-top:16px">
+              <div class="output-label" data-i18n="labelWmPreview">Preview</div>
+              <div class="output-preview-wrap"><img id="wmOutImg" alt="watermarked"></div>
+            </div>
+            <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
+              <button class="btn-primary" onclick="sdt.downloadWatermarked()" data-i18n="btnDownloadWm">Download</button>
+              <button class="btn-secondary" onclick="sdtSendToApp('wmOutImg','watermarked_doc')" data-i18n="btnSendWmToStitcher">Send to Stitcher</button>
+              <button class="btn-secondary" onclick="sdt.clearWatermark()" data-i18n="btnClearWm">Clear</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+    <div class="toast-wrap" id="sdtToastWrap"></div>
+  </div>
+
+  <!-- Floating SDT button -->
+  <button id="sdt-fab" onclick="sdtOpen()" title="Single-Doc Tools">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+    <span class="fab-label" data-i18n="sdtBadge">Single-Doc Tools</span>
+  </button>
+
+  <!-- Lightbox -->
+  <div id="lightbox" role="dialog" aria-modal="true" style="display:none" onclick="closeLightbox(event)">
+    <button class="lightbox-close" onclick="closeLightbox()">×</button>
+    <img id="lightboxImg" alt="Full view">
+  </div>
+
+  <!-- Slot picker -->
+  <div id="slotPicker" style="display:none" onclick="closeSlotPicker(event)">
+    <div class="slot-picker-box">
+      <div class="slot-picker-title" data-i18n="slotPickerTitle">Send to document card</div>
+      <div id="slotPickerBody"></div>
+    </div>
+  </div>
+
+  <!-- ===== DOWNLOAD FORMAT PICKER MODAL ===== -->
+  <div id="dlPickerModal" style="display:none;position:fixed;inset:0;z-index:200000;background:rgba(30,44,64,0.55);display:none;align-items:center;justify-content:center;backdrop-filter:blur(3px)">
+    <div class="dl-picker-box">
+      <div class="dl-picker-title" id="dlPickerTitle" data-i18n="dlPickerTitle">Choose download format</div>
+      <div class="dl-picker-grid">
+        <button class="dl-fmt-btn dl-pdf" onclick="pickDownloadFormat('pdf')">
+          <span class="dl-fmt-icon">📄</span>
+          <span class="dl-fmt-label">PDF</span>
+          <span class="dl-fmt-sub" data-i18n="dlFmtPdfSub">A4 print-ready</span>
+        </button>
+        <button class="dl-fmt-btn dl-jpg" onclick="pickDownloadFormat('jpg')">
+          <span class="dl-fmt-icon">🖼</span>
+          <span class="dl-fmt-label">JPG</span>
+          <span class="dl-fmt-sub" data-i18n="dlFmtJpgSub">Smaller file size</span>
+        </button>
+        <button class="dl-fmt-btn dl-png" onclick="pickDownloadFormat('png')">
+          <span class="dl-fmt-icon">🖼</span>
+          <span class="dl-fmt-label">PNG</span>
+          <span class="dl-fmt-sub" data-i18n="dlFmtPngSub">Lossless quality</span>
+        </button>
+      </div>
+      <button class="btn-ghost" style="width:100%;justify-content:center;margin-top:10px" onclick="cancelDownloadPicker()" data-i18n="btnCancel">Cancel</button>
+    </div>
+  </div>
+
+  <!-- ===== SIGNATURE PLACER MODAL ===== -->
+  <div id="sigPlacerModal" tabindex="0" style="display:none;position:fixed;inset:0;z-index:200001;background:rgba(18,26,40,0.88);display:none;flex-direction:column;align-items:center;justify-content:center;gap:16px;backdrop-filter:blur(4px);padding:20px">
+    <div class="sig-placer-header">
+      <div class="sig-placer-title" data-i18n="sigPlacerTitle">🎯 Place Signature with Arrow Keys</div>
+      <div class="sig-placer-hint" data-i18n="sigPlacerHint">← → ↑ ↓ to move · Shift + arrows = bigger steps · Enter to confirm · Esc to cancel</div>
+    </div>
+    <canvas id="sigPlacerCanvas" style="border-radius:10px;box-shadow:0 24px 56px rgba(0,0,0,0.5);max-width:100%;max-height:60vh;object-fit:contain"></canvas>
+    <div class="sig-placer-info">
+      <span data-i18n="sigPlacerPos">Position:</span>
+      <strong id="sigPlacerPos">X: 0.0mm  Y: 0.0mm</strong>
+    </div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center">
+      <button class="btn-primary" onclick="confirmSigPlacement()" data-i18n="btnConfirmPlacement">✓ Confirm Placement</button>
+      <button class="btn-secondary" onclick="closeSigPlacer()" data-i18n="btnCancel">Cancel</button>
+    </div>
+    <!-- Arrow key visual joystick hint -->
+    <div class="arrow-joystick">
+      <div style="grid-column:2"><button class="joy-btn" onclick="document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowUp'}))">▲</button></div>
+      <div style="grid-column:1"><button class="joy-btn" onclick="document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft'}))">◄</button></div>
+      <div style="grid-column:2"><button class="joy-btn" onclick="document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown'}))">▼</button></div>
+      <div style="grid-column:3;grid-row:2"><button class="joy-btn" onclick="document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight'}))">►</button></div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast-wrap" id="toastWrap"></div>
+
+  <!-- i18n must load BEFORE app.js -->
+  <script src="assets/i18n.js"></script>
+  <script src="assets/app.js"></script>
+</body>
+</html>
