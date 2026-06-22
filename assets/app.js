@@ -12,7 +12,7 @@
 
 /* ============================================================
    LOCK SYSTEM
-   Fixed password: . No JSONBin, server, or admin panel.
+   Fixed password: 1234. No JSONBin, server, or admin panel.
 ============================================================ */
 const Lock = (() => {
   const STORAGE_KEY   = 'ds_session_ok';
@@ -20,6 +20,7 @@ const Lock = (() => {
   const INACTIVITY_MS = 3 * 60 * 1000; // 3 minutes
   const MAX_ATTEMPTS  = 3;
 
+  // SHA-256 of the hardcoded password "1234"
   const PASSWORD_HASH = 'd3326ae777b0cf8b2f15145b4f68f5095e893762e2db7128bad3dbef8aabbb9a';
 
   let inactivityTimer = null;
@@ -2479,7 +2480,7 @@ window.sdt = (() => {
   let _mtBgMask = null;       // transparent cut-out canvas
   let _mtBgRestoreSnapshot = null; // exact image + edit state before BG removal
   let _mtBgColor = 'transparent'; // current fill colour
-  let _mtBgMode = 'api';
+  let _mtBgMode = 'local';
 
   function mtSetBgMode(mode) {
     _mtBgMode = mode === 'local' ? 'local' : 'api';
@@ -2970,7 +2971,7 @@ const mp = (() => {
     // Build persons array
     persons = Array.from({length:4}, () => ({
       img: null, originalImg: null, canvas: null, resultCanvas: null,
-      bgCutout: null, bgColor: 'transparent', bgStatus: '', bgBusy: false,
+      bgCutout: null, bgColor: 'transparent', bgStatus: '', bgBusy: false, bgMode: 'local',
       state: freshState(),
       cropDisplayRect: null, displayScale: 1,
       dragging: false, startX: 0, startY: 0,
@@ -3034,11 +3035,18 @@ const mp = (() => {
           </div>
           <div class="mp-bg-tools">
             <div class="mp-bg-heading"><span>✂️ Automatic background</span><span class="passport-optional-badge">Optional</span></div>
+            <div class="mp-bg-method">
+              <label class="ctrl-label" for="mpBgMode${pi}">Removal Method</label>
+              <select class="ctrl-select" id="mpBgMode${pi}" ${p.bgBusy?'disabled':''} onchange="mp.setBgMode(${pi},this.value)">
+                <option value="local" ${p.bgMode!=='api'?'selected':''}>Built-in local AI</option>
+                <option value="api" ${p.bgMode==='api'?'selected':''}>remove.bg API</option>
+              </select>
+            </div>
             <div class="mp-bg-actions">
               <button class="btn-primary mp-remove-bg" ${p.bgBusy?'disabled':''} onclick="mp.removeBg(${pi})">${p.bgBusy?'⏳ Working…':'✨ Remove BG'}</button>
               ${p.originalImg ? `<button class="btn-ghost mp-restore-bg" onclick="mp.restoreBg(${pi})">↩ Restore</button>` : ''}
             </div>
-            <div class="mp-bg-status ${p.bgStatus.startsWith('Error:')?'error':''}">${p.bgStatus}</div>
+            <div class="mp-bg-status ${p.bgStatus.startsWith('Error:')?'error':''}" id="mpBgStatus${pi}">${p.bgStatus}</div>
             ${p.bgCutout ? `<div class="mp-bg-palette" aria-label="Background colour">
               <button class="mp-bg-swatch checker ${p.bgColor==='transparent'?'active':''}" title="Transparent" onclick="mp.fillBg(${pi},'transparent')"></button>
               <button class="mp-bg-swatch ${p.bgColor==='#ffffff'?'active':''}" style="--swatch:#ffffff" title="White" onclick="mp.fillBg(${pi},'#ffffff')"></button>
@@ -3107,6 +3115,7 @@ const mp = (() => {
         persons[pi].bgColor = 'transparent';
         persons[pi].bgStatus = '';
         persons[pi].bgBusy = false;
+        persons[pi].bgMode = 'local';
         persons[pi].state = freshState();
         persons[pi].cropDisplayRect = null;
         renderPersonCards();
@@ -3123,6 +3132,7 @@ const mp = (() => {
     persons[pi].bgColor = 'transparent';
     persons[pi].bgStatus = '';
     persons[pi].bgBusy = false;
+    persons[pi].bgMode = 'local';
     persons[pi].resultCanvas = null;
     persons[pi].state = freshState();
     persons[pi].cropDisplayRect = null;
@@ -3139,19 +3149,55 @@ const mp = (() => {
     });
   }
 
+  function imageToCanvas(image) {
+    const canvas = document.createElement('canvas');
+    canvas.width = image.naturalWidth || image.width;
+    canvas.height = image.naturalHeight || image.height;
+    canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+    return canvas;
+  }
+
+  function setBgStatus(pi, message) {
+    const p = persons[pi];
+    if (!p) return;
+    p.bgStatus = message;
+    const status = document.getElementById('mpBgStatus' + pi);
+    if (status) {
+      status.textContent = message;
+      status.classList.toggle('error', message.startsWith('Error:'));
+    }
+  }
+
+  function setBgMode(pi, mode) {
+    const p = persons[pi];
+    if (!p || p.bgBusy) return;
+    p.bgMode = mode === 'api' ? 'api' : 'local';
+    setBgStatus(pi, p.bgMode === 'api'
+      ? 'remove.bg API selected. If it is unavailable, the built-in local remover will run.'
+      : 'Built-in local remover selected.');
+  }
+
   async function removeBg(pi) {
     const p = persons[pi];
     if (!p || !p.img || p.bgBusy) return;
     p.bgBusy = true;
-    p.bgStatus = 'Loading the AI person detector…';
+    p.bgStatus = p.bgMode === 'api' ? 'Uploading this photo to remove.bg...' : 'Loading the AI person detector…';
     renderPersonCards();
     try {
       const source = p.originalImg || p.img;
-      const cutout = await PersonBackground.remove(source, message => {
-        p.bgStatus = message;
-        const status = document.querySelectorAll('.mp-bg-status')[pi];
-        if (status) status.textContent = message;
-      });
+      const sourceCanvas = imageToCanvas(source);
+      let cutout;
+      if (p.bgMode === 'api') {
+        try {
+          cutout = await removeBgWithApi(sourceCanvas);
+        } catch (apiError) {
+          console.warn(apiError);
+          setBgStatus(pi, 'remove.bg API is unavailable or over limit. Switching to the built-in local remover...');
+          cutout = await PersonBackground.remove(sourceCanvas, message => setBgStatus(pi, message));
+        }
+      } else {
+        cutout = await PersonBackground.remove(sourceCanvas, message => setBgStatus(pi, message));
+      }
       if (!p.originalImg) p.originalImg = source;
       p.bgCutout = cutout;
       p.bgColor = 'transparent';
@@ -3512,7 +3558,7 @@ const mp = (() => {
   document.addEventListener('DOMContentLoaded', init);
 
   return {setPersonCount, setOrient, loadFile, onDrop, rotate, flip, applyCrop, clearCrop,
-          setSize, setSizeRaw, deltaCount, clearPerson, removeBg, fillBg, restoreBg,
+          setSize, setSizeRaw, deltaCount, clearPerson, setBgMode, removeBg, fillBg, restoreBg,
           refreshPreview, downloadPDF};
 })();
 
