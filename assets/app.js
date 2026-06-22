@@ -1,5 +1,5 @@
 /* ============================================================
-   Document Stitcher - Pure Vanilla JS  v7.6
+   Document Stitcher - Pure Vanilla JS  v7.7
    Features:
    1. Multi-tool image editor (crop+rotate+flip+compress+convert at once)
    2. PDF input support with auto-detect + output options (pdf/jpg/png)
@@ -34,14 +34,23 @@ const Lock = (() => {
     return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
   }
 
-  /* ---- Fetch stored hash from JSONBin.io ---- */
+  function getBinId() {
+    const fromUrl = new URLSearchParams(location.search).get('bin');
+    if (fromUrl) {
+      localStorage.setItem('ds_jsonbin_id', fromUrl.trim());
+      return fromUrl.trim();
+    }
+    return localStorage.getItem('ds_jsonbin_id') || '';
+  }
+
+  /* ---- Fetch stored hash from JSONBin.io (public read for every device) ---- */
   async function fetchHashFromJsonBin() {
-    const binId  = localStorage.getItem('ds_jsonbin_id');
+    const binId  = getBinId();
     const apiKey = localStorage.getItem('ds_jsonbin_key');
-    if (!binId || !apiKey) return null;
+    if (!binId) return null;
     try {
       const r = await fetch(`https://api.jsonbin.io/v3/b/${binId}/latest`, {
-        headers: { 'X-Master-Key': apiKey },
+        headers: apiKey ? { 'X-Master-Key': apiKey } : {},
         cache: 'no-store'
       });
       if (!r.ok) return null;
@@ -182,7 +191,7 @@ const Lock = (() => {
     }
   }
 
-  return { init, submit, showLock, resetInactivity, saveHashToJsonBin, sha256, getValidHash };
+  return { init, submit, showLock, resetInactivity, saveHashToJsonBin, sha256, getValidHash, getBinId };
 })();
 
 /* ============================================================
@@ -190,11 +199,31 @@ const Lock = (() => {
    Regular users have no access to this panel.
 ============================================================ */
 const Admin = (() => {
+  function init() {
+    const params = new URLSearchParams(location.search);
+    if (params.get('admin') === 'setup') {
+      localStorage.setItem('ds_admin_setup', '1');
+      params.delete('admin');
+      const query = params.toString();
+      history.replaceState(null, '', location.pathname + (query ? `?${query}` : '') + location.hash);
+    }
+    updateVisibility();
+  }
+
+  function updateVisibility() {
+    const btn = document.getElementById('adminBtn');
+    if (!btn) return;
+    const isAdminDevice = !!localStorage.getItem('ds_jsonbin_key') || localStorage.getItem('ds_admin_setup') === '1';
+    btn.style.display = isAdminDevice ? '' : 'none';
+  }
+
   function open() {
     if (sessionStorage.getItem('ds_session_ok') !== '1') {
       alert('Please unlock the app first.');
       return;
     }
+    const isAdminDevice = !!localStorage.getItem('ds_jsonbin_key') || localStorage.getItem('ds_admin_setup') === '1';
+    if (!isAdminDevice) return;
     const panel = document.getElementById('adminPanel');
     if (!panel) return;
     panel.style.display = 'flex';
@@ -239,6 +268,8 @@ const Admin = (() => {
 
     if (saved) {
       setMsg('✓ Password saved to JSONBin! All users will need the new password.', '#18a87a');
+      localStorage.removeItem('ds_admin_setup');
+      updateVisibility();
     } else {
       setMsg('✓ Password saved locally only (JSONBin update failed — check Bin ID & Master Key).', '#f0a830');
     }
@@ -254,7 +285,7 @@ const Admin = (() => {
     if (el) { el.textContent = msg; el.style.color = color; }
   }
 
-  return { open, close, save };
+  return { init, open, close, save };
 })();
 
 
@@ -2677,74 +2708,17 @@ const mp = (() => {
     const areaW = pW - marginMM * 2;
     const areaH = pH - marginMM * 2;
 
-    // Divide the A4 area into person sections (same as single-photo Passport layout logic)
-    let secCols, secRows;
-    if (personCount === 1) { secCols=1; secRows=1; }
-    else if (personCount === 2) { secCols=2; secRows=1; }
-    else { secCols=2; secRows=2; }
+    const activePeople = persons.slice(0, personCount).filter(p => p.resultCanvas);
+    const placements = computeContinuousPlacements(activePeople, areaW, areaH, gapMM);
+    const placedByPerson = new Map();
 
-    const secW = (areaW - (secCols-1)*gapMM) / secCols;
-    const secH = (areaH - (secRows-1)*gapMM) / secRows;
-
-    let labels = [];
-    let anyPhoto = false;
-
-    for (let si = 0; si < personCount; si++) {
-      const p = persons[si];
-      const secCol = si % secCols;
-      const secRow = Math.floor(si / secCols);
-      const secX = marginMM + secCol*(secW + gapMM);
-      const secY = marginMM + secRow*(secH + gapMM);
-
-      if (!p.resultCanvas) {
-        // Placeholder for person without photo
-        ctx.fillStyle = 'rgba(200,200,200,0.25)';
-        ctx.fillRect(Math.round(secX*PX), Math.round(secY*PX), Math.round(secW*PX), Math.round(secH*PX));
-        ctx.strokeStyle='rgba(108,99,255,0.2)'; ctx.lineWidth=0.8; ctx.setLineDash([5,4]);
-        ctx.strokeRect(Math.round(secX*PX)+0.5, Math.round(secY*PX)+0.5, Math.round(secW*PX)-1, Math.round(secH*PX)-1);
-        ctx.setLineDash([]);
-        ctx.fillStyle = 'rgba(130,130,160,0.7)';
-        ctx.font = `bold ${Math.round(Math.min(secW,secH)*PX*0.07)}px sans-serif`;
-        ctx.textAlign='center'; ctx.textBaseline='middle';
-        ctx.fillText(`Person ${si+1}`, Math.round((secX+secW/2)*PX), Math.round((secY+secH/2)*PX));
-        continue;
-      }
-      anyPhoto = true;
-
-      // Photos placed at EXACT passport size (not scaled to fill section)
-      const imgWmm = p.state.sizeWmm || 35;
-      const imgHmm = p.state.sizeHmm || 45;
-      const count  = p.state.photoCount || 4;
-
-      // Compute how many fit in this section at exact size
-      const g = computeExactGrid(secW, secH, imgWmm, imgHmm, gapMM, count);
-
-      for (let i = 0; i < Math.min(count, g.fitsInSection); i++) {
-        const col = i % g.cols;
-        const row = Math.floor(i / g.cols);
-        const xMM = secX + col*(imgWmm + gapMM);
-        const yMM = secY + row*(imgHmm + gapMM);
-        const px = Math.round(xMM*PX), py = Math.round(yMM*PX);
-        const pw2 = Math.round(imgWmm*PX), ph2 = Math.round(imgHmm*PX);
-        if (pw2 < 1 || ph2 < 1) continue;
-        ctx.drawImage(p.resultCanvas, px, py, pw2, ph2);
-        ctx.strokeStyle='rgba(160,160,185,0.55)'; ctx.lineWidth=0.6;
-        ctx.strokeRect(px+0.5, py+0.5, pw2-1, ph2-1);
-      }
-
-      // Section divider line (subtle)
-      ctx.strokeStyle='rgba(108,99,255,0.2)'; ctx.lineWidth=0.8; ctx.setLineDash([5,4]);
-      ctx.strokeRect(Math.round(secX*PX)+0.5, Math.round(secY*PX)+0.5, Math.round(secW*PX)-1, Math.round(secH*PX)-1);
-      ctx.setLineDash([]);
-
-      // Person label
-      ctx.fillStyle='rgba(108,99,255,0.65)';
-      ctx.font=`bold ${Math.round(Math.min(secW,secH)*PX*0.046)}px sans-serif`;
-      ctx.textAlign='left'; ctx.textBaseline='top';
-      ctx.fillText(`P${si+1}`, Math.round(secX*PX)+3, Math.round(secY*PX)+3);
-
-      const placed = Math.min(count, g.fitsInSection);
-      labels.push(`P${si+1}: ${placed} photo${placed>1?'s':''} @ ${imgWmm.toFixed(0)}×${imgHmm.toFixed(0)}mm`);
+    for (const item of placements) {
+      const px = Math.round((marginMM + item.x)*PX), py = Math.round((marginMM + item.y)*PX);
+      const pw2 = Math.round(item.w*PX), ph2 = Math.round(item.h*PX);
+      ctx.drawImage(item.person.resultCanvas, px, py, pw2, ph2);
+      ctx.strokeStyle='rgba(160,160,185,0.55)'; ctx.lineWidth=0.6;
+      ctx.strokeRect(px+0.5, py+0.5, pw2-1, ph2-1);
+      placedByPerson.set(item.person, (placedByPerson.get(item.person) || 0) + 1);
     }
 
     // Page border + margin guide
@@ -2755,11 +2729,40 @@ const mp = (() => {
     ctx.strokeRect(mPx,mPx,cW-mPx*2,cH-mPx*2); ctx.setLineDash([]);
 
     const infoEl = document.getElementById('mpA4Info');
-    if (!anyPhoto) {
+    if (!activePeople.length) {
       if (infoEl) infoEl.textContent = 'Upload photos for persons above to see preview.';
     } else {
+      const labels = activePeople.map((p) => {
+        const si = persons.indexOf(p);
+        const placed = placedByPerson.get(p) || 0;
+        return `P${si+1}: ${placed} photo${placed!==1?'s':''} @ ${(p.state.sizeWmm||35).toFixed(0)}×${(p.state.sizeHmm||45).toFixed(0)}mm`;
+      });
       if (infoEl) infoEl.textContent = labels.join(' · ');
     }
+  }
+
+  /* Fill the A4 like a normal passport-photo sheet. Each person's photos
+     continue in the very next free slot, then wrap to the next row. */
+  function computeContinuousPlacements(activePeople, areaW, areaH, gapMM) {
+    const placements = [];
+    let x = 0, y = 0, rowH = 0;
+    outer: for (const person of activePeople) {
+      const w = person.state.sizeWmm || 35;
+      const h = person.state.sizeHmm || 45;
+      const count = person.state.photoCount || 4;
+      for (let i = 0; i < count; i++) {
+        if (x > 0 && x + w > areaW + 0.01) {
+          x = 0;
+          y += rowH + gapMM;
+          rowH = 0;
+        }
+        if (y + h > areaH + 0.01) break outer;
+        placements.push({ person, x, y, w, h });
+        x += w + gapMM;
+        rowH = Math.max(rowH, h);
+      }
+    }
+    return placements;
   }
 
   /* Place photos at their EXACT mm size. Find best cols/rows so they all fit.
@@ -2796,31 +2799,13 @@ const mp = (() => {
 
     const areaW = pW - marginMM * 2;
     const areaH = pH - marginMM * 2;
-    let secCols = personCount <= 1 ? 1 : 2;
-    let secRows = personCount <= 2 ? 1 : 2;
-    const secW = (areaW - (secCols-1)*gapMM) / secCols;
-    const secH = (areaH - (secRows-1)*gapMM) / secRows;
-
-    for (let si = 0; si < personCount; si++) {
-      const p = persons[si];
-      if (!p.resultCanvas) continue;
-      const secCol = si % secCols;
-      const secRow = Math.floor(si / secCols);
-      const secX = marginMM + secCol*(secW + gapMM);
-      const secY = marginMM + secRow*(secH + gapMM);
-      const imgWmm = p.state.sizeWmm || 35;
-      const imgHmm = p.state.sizeHmm || 45;
-      const count  = p.state.photoCount || 4;
-      const g = computeExactGrid(secW, secH, imgWmm, imgHmm, gapMM, count);
-      const dataUrl = p.resultCanvas.toDataURL('image/jpeg', 0.9);
-
-      for (let i = 0; i < Math.min(count, g.fitsInSection); i++) {
-        const col = i % g.cols;
-        const row = Math.floor(i / g.cols);
-        const xMM = secX + col*(imgWmm + gapMM);
-        const yMM = secY + row*(imgHmm + gapMM);
-        pdf.addImage(dataUrl, 'JPEG', xMM, yMM, imgWmm, imgHmm, undefined, 'FAST');
+    const placements = computeContinuousPlacements(activePeople.filter(p => p.resultCanvas), areaW, areaH, gapMM);
+    const imageCache = new Map();
+    for (const item of placements) {
+      if (!imageCache.has(item.person)) {
+        imageCache.set(item.person, item.person.resultCanvas.toDataURL('image/jpeg', 0.9));
       }
+      pdf.addImage(imageCache.get(item.person), 'JPEG', marginMM + item.x, marginMM + item.y, item.w, item.h, undefined, 'FAST');
     }
 
     const blob = pdf.output('blob');
@@ -2841,8 +2826,8 @@ const mp = (() => {
    INIT — Lock screen must run first
 ============================================================ */
 document.addEventListener('DOMContentLoaded', () => {
+  Admin.init();
   Lock.init();
   addDocument(false);   // two-sided
   addDocument(false);   // two-sided
 });
-
