@@ -16,7 +16,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,300;1,400&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-  <link rel="stylesheet" href="assets/style.css" />
+  <link rel="stylesheet" href="assets/style.css?v=7.13" />
   <style>
     /* Language toggle button */
     #langToggleBtn {
@@ -243,6 +243,43 @@
               <button class="btn-secondary" onclick="sdt.mtSendToApp()" data-i18n="btnSendToStitcher">→ Send to Stitcher</button>
               <button class="btn-secondary" onclick="sdt.mtReset()">↺ Reset All</button>
               <button class="btn-ghost" onclick="sdt.clearMultiTool()" data-i18n="btnClearMt">Clear</button>
+            </div>
+
+            <!-- ===== REMOVE BACKGROUND SECTION ===== -->
+            <div class="passport-section-divider" style="margin-top:10px">
+              <span>✂️ Remove Background (AI)</span>
+              <span class="passport-optional-badge">Optional</span>
+            </div>
+            <p style="font-size:12.5px;color:var(--text-muted);margin-bottom:14px">Automatically detect the person and body—no manual selection and no photo upload. The first use downloads the AI model; then choose transparency or a solid colour.</p>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px">
+              <button class="btn-primary" id="mtRemoveBgBtn" onclick="sdt.mtRemoveBg()" style="background:linear-gradient(135deg,#e066ff,#7c3aed);box-shadow:0 4px 14px rgba(180,80,255,0.35)">
+                ✨ Remove Background
+              </button>
+              <button class="btn-ghost" id="mtRestoreBgBtn" onclick="sdt.mtRestoreBg()" style="display:none">↩ Restore Original</button>
+            </div>
+
+            <div id="mtBgStatus" style="font-size:12px;color:var(--text-muted);margin-bottom:12px;min-height:18px"></div>
+
+            <!-- Fill colour palette — shown after removal -->
+            <div id="mtBgColorRow" style="display:none;margin-bottom:20px">
+              <div class="mt-section-label" style="margin-bottom:8px">🎨 Fill Background Colour</div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                <button class="bg-fill-btn active" data-color="transparent" onclick="sdt.mtFillBg('transparent',this)" title="Transparent / no fill" style="background:repeating-conic-gradient(#ccc 0% 25%,#fff 0% 50%) 0 0/16px 16px;border:2px solid var(--accent);width:36px;height:36px;border-radius:8px;cursor:pointer"></button>
+                <button class="bg-fill-btn" data-color="#ffffff" onclick="sdt.mtFillBg('#ffffff',this)" title="White" style="background:#ffffff;border:2px solid var(--border);width:36px;height:36px;border-radius:8px;cursor:pointer"></button>
+                <button class="bg-fill-btn" data-color="#87CEEB" onclick="sdt.mtFillBg('#87CEEB',this)" title="Sky Blue" style="background:#87CEEB;border:2px solid var(--border);width:36px;height:36px;border-radius:8px;cursor:pointer"></button>
+                <button class="bg-fill-btn" data-color="#b0d4f1" onclick="sdt.mtFillBg('#b0d4f1',this)" title="Light Blue" style="background:#b0d4f1;border:2px solid var(--border);width:36px;height:36px;border-radius:8px;cursor:pointer"></button>
+                <button class="bg-fill-btn" data-color="#f0f4ff" onclick="sdt.mtFillBg('#f0f4ff',this)" title="Off-White Blue" style="background:#f0f4ff;border:2px solid var(--border);width:36px;height:36px;border-radius:8px;cursor:pointer"></button>
+                <button class="bg-fill-btn" data-color="#e8f5e9" onclick="sdt.mtFillBg('#e8f5e9',this)" title="Mint Green" style="background:#e8f5e9;border:2px solid var(--border);width:36px;height:36px;border-radius:8px;cursor:pointer"></button>
+                <button class="bg-fill-btn" data-color="#fff9e6" onclick="sdt.mtFillBg('#fff9e6',this)" title="Cream" style="background:#fff9e6;border:2px solid var(--border);width:36px;height:36px;border-radius:8px;cursor:pointer"></button>
+                <button class="bg-fill-btn" data-color="#fce4ec" onclick="sdt.mtFillBg('#fce4ec',this)" title="Light Pink" style="background:#fce4ec;border:2px solid var(--border);width:36px;height:36px;border-radius:8px;cursor:pointer"></button>
+                <button class="bg-fill-btn" data-color="#eeeeee" onclick="sdt.mtFillBg('#eeeeee',this)" title="Light Grey" style="background:#eeeeee;border:2px solid var(--border);width:36px;height:36px;border-radius:8px;cursor:pointer"></button>
+                <button class="bg-fill-btn" data-color="#000000" onclick="sdt.mtFillBg('#000000',this)" title="Black" style="background:#000000;border:2px solid var(--border);width:36px;height:36px;border-radius:8px;cursor:pointer"></button>
+                <!-- Custom colour picker -->
+                <label title="Custom colour" style="width:36px;height:36px;border-radius:8px;border:2px solid var(--border);overflow:hidden;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:17px">
+                  🎨<input type="color" id="mtBgCustomColor" value="#4a90d9" oninput="sdt.mtFillBgCustom(this.value)" style="opacity:0;position:absolute;width:0;height:0">
+                </label>
+              </div>
             </div>
 
             <!-- ===== PASSPORT / A4 LAYOUT SECTION ===== -->
@@ -698,6 +735,6 @@
 
   <!-- i18n must load BEFORE app.js -->
   <script src="assets/i18n.js"></script>
-  <script src="assets/app.js"></script>
+  <script src="assets/app.js?v=7.13"></script>
 </body>
 </html>
