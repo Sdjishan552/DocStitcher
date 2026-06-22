@@ -112,6 +112,7 @@
 
       <div class="tab-bar fade-up">
         <button class="tab-btn active" onclick="sdt.switchTab('multitool',this)" data-i18n="tabMultiTool">✨ Multi-Tool Editor</button>
+        <button class="tab-btn" onclick="sdt.switchTab('bulkpdf',this)">📚 Bulk PDF Builder</button>
         <button class="tab-btn" onclick="sdt.switchTab('watermark',this)" data-i18n="tabWatermark">Watermark</button>
       </div>
 
@@ -352,6 +353,51 @@
         </div>
       </div>
 
+      <!-- BULK PDF BUILDER TAB -->
+      <div class="tool-section" id="tab-bulkpdf">
+        <div class="card" style="padding:28px">
+          <div class="card-title">📚 Bulk PDF Builder</div>
+          <p style="font-size:12.5px;color:var(--text-muted);margin-bottom:18px">Upload 40–50 images or PDFs at once, arrange them in any order, preview each page, then download as one combined PDF — like a book or document.</p>
+
+          <!-- Drop zone -->
+          <div class="drop-zone sdt-drop" id="bpDrop" onclick="document.getElementById('bpInput').click()"
+               ondragover="sdt.dzDrag(event,'bpDrop')" ondragleave="sdt.dzLeave('bpDrop')"
+               ondrop="sdt.bpDzDrop(event)">
+            <input type="file" id="bpInput" accept="image/*,.pdf,application/pdf" multiple onchange="sdt.bpAddFiles(this.files)">
+            <div class="sdt-placeholder">
+              <div class="drop-icon">📂</div>
+              <div class="drop-label">Click or drag JPG / PNG / PDF files here</div>
+              <div class="drop-hint">Multiple files at once · up to 100 files · all processing is local</div>
+            </div>
+          </div>
+
+          <!-- Toolbar -->
+          <div id="bpToolbar" style="display:none;margin-top:18px">
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px">
+              <span id="bpCount" style="font-size:13px;font-weight:700;color:var(--accent)">0 pages</span>
+              <button class="btn-secondary" onclick="document.getElementById('bpInput').click()">+ Add More</button>
+              <button class="btn-ghost" onclick="sdt.bpSortByName()">🔤 Sort by Name</button>
+              <button class="btn-ghost" onclick="sdt.bpReverseOrder()">↕ Reverse</button>
+              <button class="btn-ghost" style="color:#e04;border-color:#e04" onclick="sdt.bpClearAll()">🗑 Clear All</button>
+              <button class="btn-primary" onclick="sdt.bpDownloadPDF()" style="margin-left:auto">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle;margin-right:4px"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 18 15 15"/></svg>
+                Download PDF
+              </button>
+            </div>
+            <p style="font-size:11.5px;color:var(--text-muted);margin-bottom:14px">Drag thumbnails to reorder · click a thumbnail to preview full size · click ✕ to remove</p>
+
+            <!-- Thumbnail grid -->
+            <div id="bpGrid" class="bp-grid"></div>
+          </div>
+
+          <!-- Progress bar -->
+          <div id="bpProgress" style="display:none;margin-top:16px">
+            <div style="font-size:12.5px;color:var(--text-muted);margin-bottom:6px" id="bpProgressLabel">Processing…</div>
+            <div class="bp-progress-track"><div class="bp-progress-bar" id="bpProgressBar"></div></div>
+          </div>
+        </div>
+      </div>
+
       <!-- WATERMARK TAB -->
       <div class="tool-section" id="tab-watermark">
         <div class="card" style="padding:28px">
@@ -487,6 +533,26 @@
       <div style="grid-column:1"><button class="joy-btn" onclick="document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft'}))">◄</button></div>
       <div style="grid-column:2"><button class="joy-btn" onclick="document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown'}))">▼</button></div>
       <div style="grid-column:3;grid-row:2"><button class="joy-btn" onclick="document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight'}))">►</button></div>
+    </div>
+  </div>
+
+  <!-- BULK PDF LIGHTBOX -->
+  <div id="bpLightbox" style="display:none;position:fixed;inset:0;z-index:300000;background:rgba(10,14,22,0.93);backdrop-filter:blur(4px);flex-direction:column;align-items:center;justify-content:center">
+    <div class="bp-lb-bar">
+      <button class="bp-lb-nav" id="bpLbPrev" onclick="sdt.bpLbNav(-1)">‹</button>
+      <span id="bpLbCounter" style="font-size:13px;font-weight:700;color:#fff;min-width:80px;text-align:center"></span>
+      <button class="bp-lb-nav" id="bpLbNext" onclick="sdt.bpLbNav(1)">›</button>
+      <span id="bpLbName" style="font-size:12px;color:rgba(255,255,255,0.6);flex:1;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 12px"></span>
+      <button class="bp-lb-nav" id="bpLbMoveL" onclick="sdt.bpLbMove(-1)" title="Move page left in order" style="font-size:16px">←</button>
+      <button class="bp-lb-nav" id="bpLbMoveR" onclick="sdt.bpLbMove(1)"  title="Move page right in order" style="font-size:16px">→</button>
+      <button class="bp-lb-nav" onclick="sdt.bpLbDelete()" title="Remove this page" style="color:#f66">✕</button>
+      <button class="bp-lb-close" onclick="sdt.bpLbClose()">✕ Close</button>
+    </div>
+    <div class="bp-lb-img-wrap" id="bpLbImgWrap">
+      <img id="bpLbImg" alt="page preview" style="max-width:90vw;max-height:82vh;border-radius:6px;box-shadow:0 20px 60px rgba(0,0,0,0.7);object-fit:contain">
+    </div>
+    <div class="bp-lb-footer">
+      <span style="font-size:11.5px;color:rgba(255,255,255,0.45)">← → arrow keys to navigate · ← → buttons to reorder</span>
     </div>
   </div>
 
