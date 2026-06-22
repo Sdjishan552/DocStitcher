@@ -1486,14 +1486,16 @@ window.sdt = (() => {
     };
   }
 
-  // Get position of image i in mm from top-left of printable area
-  function getImgPos(i, g, marginMM, gapMM, pW, pH){
+  // Get position of image i in mm.
+  // image 0 always lands in the chosen corner cell.
+  function getImgPos(i, g, marginMM, gapMM){
     const {cols, rows, placedW, placedH, cellW, cellH} = g;
-    const corner = a4State.corner;  // tl tr bl br
-    const dir    = a4State.imgDir;  // row or col
+    const corner = a4State.corner;   // tl tr bl br
+    const dir    = a4State.imgDir;   // row | col
 
+    // 1. Natural (top-left, row-first) col,row for slot i
     let col, row;
-    if(dir==='row'){
+    if(dir === 'row'){
       col = i % cols;
       row = Math.floor(i / cols);
     } else {
@@ -1501,15 +1503,39 @@ window.sdt = (() => {
       col = Math.floor(i / rows);
     }
 
-    // Flip axes based on corner
-    const flipH = corner==='tr' || corner==='br';
-    const flipV = corner==='bl' || corner==='br';
-    if(flipH) col = cols - 1 - col;
-    if(flipV) row = rows - 1 - row;
+    // 2. Mirror so image 0 is in the chosen corner.
+    //    flipH: reverse column index within the grid.
+    //    flipV: reverse row index within the grid.
+    const flipH = (corner === 'tr' || corner === 'br');
+    const flipV = (corner === 'bl' || corner === 'br');
+    if(flipH) col = (cols - 1) - col;
+    if(flipV) row = (rows - 1) - row;
 
-    // Cell top-left in mm (from page top-left)
-    const xMM = marginMM + col*(cellW+gapMM) + (cellW-placedW)/2;
-    const yMM = marginMM + row*(cellH+gapMM) + (cellH-placedH)/2;
+    // 3. mm position using cell pitch so cells don't overlap.
+    //    Centre image inside its cell (matters for auto-fit mode).
+    let xMM = marginMM + col*(cellW + gapMM) + (cellW - placedW)/2;
+    let yMM = marginMM + row*(cellH + gapMM) + (cellH - placedH)/2;
+
+    // 4. For bottom corners, anchor the whole grid block to the bottom of the
+    //    printable area instead of the top.  We know the block height:
+    //    rows*(cellH+gapMM) - gapMM (subtract one trailing gap).
+    //    So shift all rows down by (areaH - blockH).
+    if(flipV){
+      const pH = a4State.orient==='portrait'?297:210;
+      const areaH = pH - marginMM*2;
+      const blockH = rows*(cellH + gapMM) - gapMM;
+      const shiftDown = areaH - blockH;
+      yMM += shiftDown;
+    }
+    // Same logic for right-anchored columns.
+    if(flipH){
+      const pW = a4State.orient==='portrait'?210:297;
+      const areaW = pW - marginMM*2;
+      const blockW = cols*(cellW + gapMM) - gapMM;
+      const shiftRight = areaW - blockW;
+      xMM += shiftRight;
+    }
+
     return {xMM, yMM};
   }
 
