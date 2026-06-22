@@ -1295,6 +1295,147 @@ function sendToNewDocument() {
   toast(Lang.t('toastNewDocCreated'));
 }
 
+/* Refine the AI mask for still portraits: remove disconnected false positives,
+   keep fine hair detail, and remove the old background colour from soft edges. */
+function createPrecisePersonCutout(source, segmentationMask) {
+  const width = source.width;
+  const height = source.height;
+  const count = width * height;
+  const maskCanvas = document.createElement('canvas');
+  maskCanvas.width = width;
+  maskCanvas.height = height;
+  const maskCtx = maskCanvas.getContext('2d', {willReadFrequently:true});
+  maskCtx.drawImage(segmentationMask, 0, 0, width, height);
+  const raw = maskCtx.getImageData(0, 0, width, height).data;
+  const confidence = new Uint8Array(count);
+
+  // A compact Gaussian pass reduces the blocky low-resolution model boundary.
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let total = 0, weight = 0;
+      for (let oy = -1; oy <= 1; oy++) {
+        const yy = Math.max(0, Math.min(height - 1, y + oy));
+        for (let ox = -1; ox <= 1; ox++) {
+          const xx = Math.max(0, Math.min(width - 1, x + ox));
+          const w = (ox === 0 ? 2 : 1) * (oy === 0 ? 2 : 1);
+          total += raw[(yy * width + xx) * 4] * w;
+          weight += w;
+        }
+      }
+      confidence[y * width + x] = Math.round(total / weight);
+    }
+  }
+
+  // Label confident connected regions and retain only the main portrait.
+  const labels = new Int32Array(count);
+  const queue = new Int32Array(count);
+  let label = 0, largestLabel = 0, largestSize = 0;
+  for (let start = 0; start < count; start++) {
+    if (labels[start] || confidence[start] < 108) continue;
+    label++;
+    let head = 0, tail = 0;
+    queue[tail++] = start;
+    labels[start] = label;
+    while (head < tail) {
+      const index = queue[head++];
+      const x = index % width;
+      const candidates = [index - width, index + width, index - 1, index + 1];
+      for (let n = 0; n < 4; n++) {
+        const next = candidates[n];
+        if (next < 0 || next >= count || labels[next] || confidence[next] < 108) continue;
+        if ((n === 2 && x === 0) || (n === 3 && x === width - 1)) continue;
+        labels[next] = label;
+        queue[tail++] = next;
+      }
+    }
+    if (tail > largestSize) { largestSize = tail; largestLabel = label; }
+  }
+  if (!largestLabel || largestSize < count * 0.004) {
+    throw new Error('No clear main person was detected. Try a sharper, well-lit photo.');
+  }
+
+  // Dilate the retained component slightly so wispy hair beside the core survives.
+  const keep = new Uint8Array(count);
+  for (let i = 0; i < count; i++) {
+    if (labels[i] !== largestLabel) continue;
+    const x = i % width, y = Math.floor(i / width);
+    for (let oy = -3; oy <= 3; oy++) {
+      const yy = y + oy;
+      if (yy < 0 || yy >= height) continue;
+      for (let ox = -3; ox <= 3; ox++) {
+        const xx = x + ox;
+        if (xx >= 0 && xx < width && ox * ox + oy * oy <= 9) keep[yy * width + xx] = 1;
+      }
+    }
+  }
+
+  const sourceCtx = source.getContext('2d', {willReadFrequently:true});
+  const output = sourceCtx.getImageData(0, 0, width, height);
+  const pixels = output.data;
+  const smoothstep = value => {
+    const t = Math.max(0, Math.min(1, (value - 0.16) / 0.68));
+    return t * t * (3 - 2 * t);
+  };
+
+  for (let i = 0; i < count; i++) {
+    const p = i * 4;
+    if (!keep[i]) { pixels[p + 3] = 0; continue; }
+    let alpha = smoothstep(confidence[i] / 255);
+    if (alpha <= 0.01) { pixels[p + 3] = 0; continue; }
+
+    // Find clean pixels just outside and inside the silhouette.
+    const x = i % width, y = Math.floor(i / width);
+    let bgIndex = -1, innerIndex = -1, edgeDepth = 7;
+    for (let radius = 1; radius <= 6; radius++) {
+      for (let oy = -radius; oy <= radius; oy++) {
+        const yy = y + oy;
+        if (yy < 0 || yy >= height) continue;
+        for (let ox = -radius; ox <= radius; ox++) {
+          if (Math.abs(ox) !== radius && Math.abs(oy) !== radius) continue;
+          const xx = x + ox;
+          if (xx < 0 || xx >= width) continue;
+          const candidate = yy * width + xx;
+          if (confidence[candidate] < 55) {
+            if (bgIndex < 0) bgIndex = candidate * 4;
+            edgeDepth = Math.min(edgeDepth, radius);
+          }
+          if (innerIndex < 0 && confidence[candidate] > 242) innerIndex = candidate * 4;
+        }
+      }
+    }
+
+    // Contract only the outer rim. This removes the dark/green one-pixel outline.
+    const edgeAlpha = [1, 0.30, 0.66, 0.88, 0.96, 1, 1];
+    alpha *= edgeAlpha[Math.min(edgeDepth, 6)];
+    if (alpha <= 0.015) { pixels[p + 3] = 0; continue; }
+
+    // Pull edge RGB toward a clean interior sample before alpha compositing.
+    if (edgeDepth <= 4 && innerIndex >= 0) {
+      const interiorMix = [0, 0.72, 0.48, 0.26, 0.10];
+      const mix = interiorMix[edgeDepth];
+      for (let channel = 0; channel < 3; channel++) {
+        pixels[p + channel] = Math.round(pixels[p + channel] * (1 - mix) + pixels[innerIndex + channel] * mix);
+      }
+    }
+
+    // Unmix any old background colour still stored in translucent hair pixels.
+    if (bgIndex >= 0 && alpha < 0.98) {
+      const safeAlpha = Math.max(alpha, 0.28);
+      for (let channel = 0; channel < 3; channel++) {
+        const foreground = (pixels[p + channel] - (1 - safeAlpha) * pixels[bgIndex + channel]) / safeAlpha;
+        pixels[p + channel] = Math.max(0, Math.min(255, Math.round(foreground)));
+      }
+    }
+    pixels[p + 3] = Math.round(alpha * 255);
+  }
+
+  const cutout = document.createElement('canvas');
+  cutout.width = width;
+  cutout.height = height;
+  cutout.getContext('2d').putImageData(output, 0, 0);
+  return cutout;
+}
+
 /* ============================================================
    SINGLE-DOC TOOLS MODULE — MULTI-TOOL (all-at-once)
 ============================================================ */
@@ -1610,7 +1751,14 @@ window.sdt = (() => {
   function mtSetQuality(val){mtState.quality=Number(val);document.getElementById('mtQualLabel').textContent=val+'%';upSlider(document.getElementById('mtQual'));renderMultiTool();}
   function mtSetFormat(val){mtState.format=val;renderMultiTool();}
   function mtSetMaxW(val){mtState.maxW=Number(val);document.getElementById('mtMaxWLabel').textContent=Number(val)===0?'Original':val+'px';upSlider(document.getElementById('mtMaxW'));renderMultiTool();}
-  function mtReset(){mtState={rotateDeg:0,flipH:false,flipV:false,cropRect:null,quality:85,format:'jpeg',maxW:0,hasCrop:false};mtCropDisplayRect=null;
+  function mtReset(){
+    // If BG was removed, restore original first
+    if(_mtOrigImgBackup){mtOrigImg=_mtOrigImgBackup;_mtOrigImgBackup=null;}
+    _mtBgMask=null;_mtBgColor='transparent';
+    const cr=document.getElementById('mtBgColorRow');if(cr)cr.style.display='none';
+    const rb=document.getElementById('mtRestoreBgBtn');if(rb)rb.style.display='none';
+    const st=document.getElementById('mtBgStatus');if(st)st.textContent='';
+    mtState={rotateDeg:0,flipH:false,flipV:false,cropRect:null,quality:85,format:'jpeg',maxW:0,hasCrop:false};mtCropDisplayRect=null;
     document.getElementById('mtQual').value=85;document.getElementById('mtQualLabel').textContent='85%';
     document.getElementById('mtMaxW').value=0;document.getElementById('mtMaxWLabel').textContent='Original';
     document.getElementById('mtFmt').value='jpeg';
@@ -2244,13 +2392,188 @@ window.sdt = (() => {
     document.getElementById('slotPicker').style.display='flex';
   }
 
+  /* =====================================================================
+     BACKGROUND REMOVAL — MediaPipe Selfie Segmentation (100% local)
+     ===================================================================== */
+  let _mtBgMask = null;       // ImageData of alpha mask (same size as mtOrigImg)
+  let _mtOrigImgBackup = null; // backup of mtOrigImg before BG removal
+  let _mtBgColor = 'transparent'; // current fill colour
+
+  function _loadMediaPipe(cb) {
+    if (window._mpSegmenter) { cb(window._mpSegmenter); return; }
+    const status = document.getElementById('mtBgStatus');
+    status.textContent = '⏳ Loading AI model (first time ~3 MB)…';
+
+    // Load the MediaPipe selfie-segmentation solution
+    function tryLoad() {
+      if (typeof SelfieSegmentation !== 'undefined') {
+        const seg = new SelfieSegmentation({locateFile: f =>
+          `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1/${f}`
+        });
+        seg.setOptions({ modelSelection: 0 }); // Higher-detail model; works well for portraits and full body.
+        seg.onResults(r => {
+          if (window._mpSegCallback) window._mpSegCallback(r);
+        });
+        seg.initialize().then(() => {
+          window._mpSegmenter = seg;
+          status.textContent = '✅ AI model ready!';
+          cb(seg);
+        }).catch(e => {
+          status.textContent = '❌ Model load failed: ' + e.message;
+          const btn = document.getElementById('mtRemoveBgBtn');
+          if (btn) { btn.disabled = false; btn.textContent = '✨ Remove Background'; }
+        });
+        return;
+      }
+      // Load script then retry
+      if (!document.getElementById('mp-ss-script')) {
+        const s = document.createElement('script');
+        s.id = 'mp-ss-script';
+        s.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1/selfie_segmentation.js';
+        s.crossOrigin = 'anonymous';
+        s.onload = () => tryLoad();
+        s.onerror = () => {
+          status.textContent = '❌ Failed to load AI files. Check your internet and try again.';
+          const btn = document.getElementById('mtRemoveBgBtn');
+          if (btn) { btn.disabled = false; btn.textContent = '✨ Remove Background'; }
+        };
+        document.head.appendChild(s);
+      }
+    }
+    tryLoad();
+  }
+
+  async function mtRemoveBg() {
+    if (!mtOrigImg) { toast('Upload an image first.', 'error'); return; }
+    const btn = document.getElementById('mtRemoveBgBtn');
+    const status = document.getElementById('mtBgStatus');
+    btn.disabled = true;
+    btn.textContent = '⏳ Processing…';
+
+    _loadMediaPipe(async (seg) => {
+      try {
+        status.textContent = '🔍 Detecting person & segmenting…';
+
+        // Draw source to an offscreen canvas
+        const segmentationSource = _mtOrigImgBackup || mtOrigImg;
+        const src = document.createElement('canvas');
+        src.width = segmentationSource.naturalWidth;
+        src.height = segmentationSource.naturalHeight;
+        const sCtx = src.getContext('2d');
+        sCtx.drawImage(segmentationSource, 0, 0);
+
+        // Run segmentation — MediaPipe needs an HTMLImageElement or canvas
+        await new Promise((resolve, reject) => {
+          window._mpSegCallback = (results) => {
+            window._mpSegCallback = null;
+            try {
+              // results.segmentationMask is a canvas with the mask
+              status.textContent = '✨ Refining hair, clothing and edge detail…';
+              _mtBgMask = createPrecisePersonCutout(src, results.segmentationMask);
+              resolve();
+            } catch(e) { reject(e); }
+          };
+          Promise.resolve(seg.send({image: src})).catch(reject);
+        });
+
+        // Backup original image
+        if (!_mtOrigImgBackup) _mtOrigImgBackup = mtOrigImg;
+
+        // Apply current fill colour and update mtOrigImg
+        _applyBgFill(_mtBgColor);
+
+        // Show UI
+        document.getElementById('mtBgColorRow').style.display = 'block';
+        document.getElementById('mtRestoreBgBtn').style.display = 'inline-flex';
+        status.textContent = '✅ Background removed! Pick a fill colour below, or keep transparent.';
+        btn.textContent = '✨ Re-run Removal';
+      } catch(e) {
+        status.textContent = '❌ Error: ' + e.message;
+        console.error(e);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  }
+
+  function _applyBgFill(color) {
+    if (!_mtBgMask) return;
+    const W = _mtBgMask.width, H = _mtBgMask.height;
+    const out = document.createElement('canvas');
+    out.width = W; out.height = H;
+    const ctx = out.getContext('2d');
+
+    if (color !== 'transparent') {
+      ctx.fillStyle = color;
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    // Draw the cut-out (person with alpha) on top
+    if (_mtBgMask instanceof HTMLCanvasElement) {
+      ctx.drawImage(_mtBgMask, 0, 0);
+    } else {
+      const tmp = document.createElement('canvas');
+      tmp.width = W; tmp.height = H;
+      tmp.getContext('2d').putImageData(_mtBgMask, 0, 0);
+      ctx.drawImage(tmp, 0, 0);
+    }
+
+    // Replace mtOrigImg with result
+    const dataUrl = out.toDataURL('image/png');
+    const newImg = new Image();
+    newImg.onload = () => {
+      mtOrigImg = newImg;
+      // Force PNG format so transparency is preserved when colour = transparent
+      if (color === 'transparent') {
+        document.getElementById('mtFmt').value = 'png';
+        mtState.format = 'png';
+      }
+      renderMultiTool();
+      setTimeout(bindMtCropEvents, 50);
+    };
+    newImg.src = dataUrl;
+  }
+
+  function mtFillBg(color, btn) {
+    _mtBgColor = color;
+    // Update active state on colour buttons
+    document.querySelectorAll('.bg-fill-btn').forEach(b => b.style.border = '2px solid var(--border)');
+    if (btn) btn.style.border = '2px solid var(--accent)';
+    _applyBgFill(color);
+  }
+
+  function mtFillBgCustom(color) {
+    _mtBgColor = color;
+    document.querySelectorAll('.bg-fill-btn').forEach(b => b.style.border = '2px solid var(--border)');
+    _applyBgFill(color);
+  }
+
+  function mtRestoreBg() {
+    if (!_mtOrigImgBackup) return;
+    mtOrigImg = _mtOrigImgBackup;
+    _mtOrigImgBackup = null;
+    _mtBgMask = null;
+    _mtBgColor = 'transparent';
+    document.getElementById('mtBgColorRow').style.display = 'none';
+    document.getElementById('mtRestoreBgBtn').style.display = 'none';
+    document.getElementById('mtBgStatus').textContent = '';
+    renderMultiTool();
+    setTimeout(bindMtCropEvents, 50);
+    toast('Original image restored.');
+  }
+  /* ===== END BACKGROUND REMOVAL ===== */
+
   function clearMultiTool() {
     mtOrigFile=null;mtOrigImg=null;mtCropDisplayRect=null;
+    _mtBgMask=null;_mtOrigImgBackup=null;_mtBgColor='transparent';
     mtState={rotateDeg:0,flipH:false,flipV:false,cropRect:null,quality:85,format:'jpeg',maxW:0,hasCrop:false};
     document.getElementById('mtPlaceholder').style.display='flex';
     document.getElementById('mtDrop').style.display='flex';
     document.getElementById('mtEditor').style.display='none';
     document.getElementById('mtInput').value='';
+    const cr=document.getElementById('mtBgColorRow'); if(cr) cr.style.display='none';
+    const rb=document.getElementById('mtRestoreBgBtn'); if(rb) rb.style.display='none';
+    const st=document.getElementById('mtBgStatus'); if(st) st.textContent='';
   }
 
   /* ---- WATERMARK (keep existing) ---- */
@@ -2337,6 +2660,7 @@ window.sdt = (() => {
     bindMtCropEvents,
     mtSizeChanged,mtSizeUnitChanged,mtApplySizePreset,mtClearSize,
     setA4Orient,setA4Corner,setA4ImgDir,a4CountDelta,a4Preview,downloadA4PDF,
+    mtRemoveBg,mtFillBg,mtFillBgCustom,mtRestoreBg,
     // Bulk PDF Builder
     bpAddFiles,bpDzDrop,bpDelete,bpMove,bpSortByName,bpReverseOrder,bpClearAll,
     bpLbOpen,bpLbNav,bpLbMove,bpLbDelete,bpLbClose,
@@ -2357,6 +2681,93 @@ if('serviceWorker'in navigator){
   });
 }
 
+/* Shared automatic person cut-out service for the Multi-Person editor. */
+const PersonBackground = (() => {
+  let loadPromise = null;
+  let queue = Promise.resolve();
+
+  function load() {
+    if (window._mpSegmenter) return Promise.resolve(window._mpSegmenter);
+    if (loadPromise) return loadPromise;
+    loadPromise = new Promise((resolve, reject) => {
+      const start = () => {
+        try {
+          const segmenter = new SelfieSegmentation({locateFile: file =>
+            `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1/${file}`
+          });
+          segmenter.setOptions({modelSelection:0});
+          segmenter.onResults(results => {
+            if (window._mpSegCallback) window._mpSegCallback(results);
+          });
+          segmenter.initialize().then(() => {
+            window._mpSegmenter = segmenter;
+            resolve(segmenter);
+          }, reject);
+        } catch (error) { reject(error); }
+      };
+      if (typeof SelfieSegmentation !== 'undefined') { start(); return; }
+      let script = document.getElementById('mp-ss-script');
+      if (!script) {
+        script = document.createElement('script');
+        script.id = 'mp-ss-script';
+        script.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1/selfie_segmentation.js';
+        script.crossOrigin = 'anonymous';
+        document.head.appendChild(script);
+      }
+      script.addEventListener('load', start, {once:true});
+      script.addEventListener('error', () => reject(new Error('AI files could not be loaded. Check your internet connection.')), {once:true});
+    }).catch(error => { loadPromise = null; throw error; });
+    return loadPromise;
+  }
+
+  function removeNow(image, onStatus) {
+    return load().then(segmenter => new Promise((resolve, reject) => {
+      if (onStatus) onStatus('Detecting person and body…');
+      const source = document.createElement('canvas');
+      source.width = image.naturalWidth || image.width;
+      source.height = image.naturalHeight || image.height;
+      source.getContext('2d').drawImage(image, 0, 0, source.width, source.height);
+      const timer = setTimeout(() => {
+        window._mpSegCallback = null;
+        reject(new Error('Person detection timed out. Please try again.'));
+      }, 30000);
+      window._mpSegCallback = results => {
+        clearTimeout(timer);
+        window._mpSegCallback = null;
+        try {
+          if (onStatus) onStatus('Refining hair, clothing and edge detail…');
+          const cutout = createPrecisePersonCutout(source, results.segmentationMask);
+          resolve(cutout);
+        } catch (error) { reject(error); }
+      };
+      Promise.resolve(segmenter.send({image:source})).catch(error => {
+        clearTimeout(timer);
+        window._mpSegCallback = null;
+        reject(error);
+      });
+    }));
+  }
+
+  function remove(image, onStatus) {
+    const task = queue.then(() => removeNow(image, onStatus));
+    queue = task.catch(() => {});
+    return task;
+  }
+
+  function fill(cutout, color) {
+    const canvas = document.createElement('canvas');
+    canvas.width = cutout.width; canvas.height = cutout.height;
+    const ctx = canvas.getContext('2d');
+    if (color !== 'transparent') {
+      ctx.fillStyle = color;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+    ctx.drawImage(cutout, 0, 0);
+    return canvas;
+  }
+  return {remove, fill};
+})();
+
 /* ============================================================
    MULTI-PERSON A4 MODULE
    Up to 4 persons, each with own image + crop/rotate/flip/resize.
@@ -2370,7 +2781,8 @@ const mp = (() => {
   function init() {
     // Build persons array
     persons = Array.from({length:4}, () => ({
-      img: null, canvas: null, resultCanvas: null,
+      img: null, originalImg: null, canvas: null, resultCanvas: null,
+      bgCutout: null, bgColor: 'transparent', bgStatus: '', bgBusy: false,
       state: freshState(),
       cropDisplayRect: null, displayScale: 1,
       dragging: false, startX: 0, startY: 0,
@@ -2432,6 +2844,22 @@ const mp = (() => {
             <button class="btn-secondary" style="font-size:11px;padding:5px 10px" onclick="mp.applyCrop(${pi})">✂ Apply Crop</button>
             <button class="btn-ghost"     style="font-size:11px;padding:5px 10px" onclick="mp.clearCrop(${pi})">Clear Crop</button>
           </div>
+          <div class="mp-bg-tools">
+            <div class="mp-bg-heading"><span>✂️ Automatic background</span><span class="passport-optional-badge">Optional</span></div>
+            <div class="mp-bg-actions">
+              <button class="btn-primary mp-remove-bg" ${p.bgBusy?'disabled':''} onclick="mp.removeBg(${pi})">${p.bgBusy?'⏳ Working…':'✨ Remove BG'}</button>
+              ${p.originalImg ? `<button class="btn-ghost mp-restore-bg" onclick="mp.restoreBg(${pi})">↩ Restore</button>` : ''}
+            </div>
+            <div class="mp-bg-status ${p.bgStatus.startsWith('Error:')?'error':''}">${p.bgStatus}</div>
+            ${p.bgCutout ? `<div class="mp-bg-palette" aria-label="Background colour">
+              <button class="mp-bg-swatch checker ${p.bgColor==='transparent'?'active':''}" title="Transparent" onclick="mp.fillBg(${pi},'transparent')"></button>
+              <button class="mp-bg-swatch ${p.bgColor==='#ffffff'?'active':''}" style="--swatch:#ffffff" title="White" onclick="mp.fillBg(${pi},'#ffffff')"></button>
+              <button class="mp-bg-swatch ${p.bgColor==='#87CEEB'?'active':''}" style="--swatch:#87CEEB" title="Sky blue" onclick="mp.fillBg(${pi},'#87CEEB')"></button>
+              <button class="mp-bg-swatch ${p.bgColor==='#b0d4f1'?'active':''}" style="--swatch:#b0d4f1" title="Light blue" onclick="mp.fillBg(${pi},'#b0d4f1')"></button>
+              <button class="mp-bg-swatch ${p.bgColor==='#eeeeee'?'active':''}" style="--swatch:#eeeeee" title="Light grey" onclick="mp.fillBg(${pi},'#eeeeee')"></button>
+              <label class="mp-bg-custom" title="Custom colour">🎨<input type="color" value="${p.bgColor==='transparent'?'#4a90d9':p.bgColor}" oninput="mp.fillBg(${pi},this.value)"></label>
+            </div>` : ''}
+          </div>
           <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <span style="font-size:11.5px;color:var(--text-muted)">Size:</span>
             <button class="btn-secondary size-preset-btn" onclick="mp.setSize(${pi},35,45,'mm')">3.5×4.5cm</button>
@@ -2486,6 +2914,11 @@ const mp = (() => {
       const img = new Image();
       img.onload = () => {
         persons[pi].img = img;
+        persons[pi].originalImg = null;
+        persons[pi].bgCutout = null;
+        persons[pi].bgColor = 'transparent';
+        persons[pi].bgStatus = '';
+        persons[pi].bgBusy = false;
         persons[pi].state = freshState();
         persons[pi].cropDisplayRect = null;
         renderPersonCards();
@@ -2497,11 +2930,83 @@ const mp = (() => {
 
   function clearPerson(pi) {
     persons[pi].img = null;
+    persons[pi].originalImg = null;
+    persons[pi].bgCutout = null;
+    persons[pi].bgColor = 'transparent';
+    persons[pi].bgStatus = '';
+    persons[pi].bgBusy = false;
     persons[pi].resultCanvas = null;
     persons[pi].state = freshState();
     persons[pi].cropDisplayRect = null;
     renderPersonCards();
     refreshPreview();
+  }
+
+  function canvasToImage(canvas) {
+    return new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error('Could not prepare the edited photo.'));
+      image.src = canvas.toDataURL('image/png');
+    });
+  }
+
+  async function removeBg(pi) {
+    const p = persons[pi];
+    if (!p || !p.img || p.bgBusy) return;
+    p.bgBusy = true;
+    p.bgStatus = 'Loading the AI person detector…';
+    renderPersonCards();
+    try {
+      const source = p.originalImg || p.img;
+      const cutout = await PersonBackground.remove(source, message => {
+        p.bgStatus = message;
+        const status = document.querySelectorAll('.mp-bg-status')[pi];
+        if (status) status.textContent = message;
+      });
+      if (!p.originalImg) p.originalImg = source;
+      p.bgCutout = cutout;
+      p.bgColor = 'transparent';
+      p.img = await canvasToImage(PersonBackground.fill(cutout, p.bgColor));
+      p.bgStatus = 'Background removed. Choose transparent or a solid colour.';
+      p.cropDisplayRect = null;
+      p.state.cropRect = null;
+      p.state.hasCrop = false;
+      toast(`Person ${pi + 1}: background removed.`);
+    } catch (error) {
+      p.bgStatus = 'Error: ' + error.message;
+      toast(error.message, 'error');
+    } finally {
+      p.bgBusy = false;
+      renderPersonCards();
+      refreshPreview();
+    }
+  }
+
+  async function fillBg(pi, color) {
+    const p = persons[pi];
+    if (!p || !p.bgCutout) return;
+    p.bgColor = color;
+    p.img = await canvasToImage(PersonBackground.fill(p.bgCutout, color));
+    p.bgStatus = color === 'transparent' ? 'Transparent background selected.' : `Solid background ${color} selected.`;
+    renderPersonCards();
+    refreshPreview();
+  }
+
+  function restoreBg(pi) {
+    const p = persons[pi];
+    if (!p || !p.originalImg) return;
+    p.img = p.originalImg;
+    p.originalImg = null;
+    p.bgCutout = null;
+    p.bgColor = 'transparent';
+    p.bgStatus = '';
+    p.cropDisplayRect = null;
+    p.state.cropRect = null;
+    p.state.hasCrop = false;
+    renderPersonCards();
+    refreshPreview();
+    toast(`Person ${pi + 1}: original background restored.`);
   }
 
   function rotate(pi, deg) {
@@ -2608,7 +3113,7 @@ const mp = (() => {
 
     // Update preview img
     const prevEl = document.getElementById('mpPreview'+pi);
-    if (prevEl) prevEl.src = cropSrc.toDataURL('image/jpeg', 0.85);
+    if (prevEl) prevEl.src = cropSrc.toDataURL(p.bgCutout && p.bgColor === 'transparent' ? 'image/png' : 'image/jpeg', 0.85);
 
     refreshPreview();
   }
@@ -2796,7 +3301,14 @@ const mp = (() => {
     const imageCache = new Map();
     for (const item of placements) {
       if (!imageCache.has(item.person)) {
-        imageCache.set(item.person, item.person.resultCanvas.toDataURL('image/jpeg', 0.9));
+        const flattened = document.createElement('canvas');
+        flattened.width = item.person.resultCanvas.width;
+        flattened.height = item.person.resultCanvas.height;
+        const flattenedCtx = flattened.getContext('2d');
+        flattenedCtx.fillStyle = '#ffffff';
+        flattenedCtx.fillRect(0, 0, flattened.width, flattened.height);
+        flattenedCtx.drawImage(item.person.resultCanvas, 0, 0);
+        imageCache.set(item.person, flattened.toDataURL('image/jpeg', 0.92));
       }
       pdf.addImage(imageCache.get(item.person), 'JPEG', marginMM + item.x, marginMM + item.y, item.w, item.h, undefined, 'FAST');
     }
@@ -2812,7 +3324,8 @@ const mp = (() => {
   document.addEventListener('DOMContentLoaded', init);
 
   return {setPersonCount, setOrient, loadFile, onDrop, rotate, flip, applyCrop, clearCrop,
-          setSize, setSizeRaw, deltaCount, clearPerson, refreshPreview, downloadPDF};
+          setSize, setSizeRaw, deltaCount, clearPerson, removeBg, fillBg, restoreBg,
+          refreshPreview, downloadPDF};
 })();
 
 /* ============================================================
