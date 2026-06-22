@@ -6,15 +6,13 @@
    3. Signature keyboard joystick placement (arrow keys)
    4. One-sided document cards with signature option
    5. Download format chooser (PDF/PNG/JPG) for every download
-   6. Multi-person A4 passport layout (up to 4 persons)
+   6. Hardcoded password lock with 3-attempt video
+   7. Multi-person A4 passport layout (up to 4 persons)
 ============================================================ */
 
 /* ============================================================
    LOCK SYSTEM
-   Password hash stored on JSONBin.io (free, owner-controlled).
-   Visitors only see the lock screen; only admin (with API key)
-   can change the password from the Admin panel.
-   Regular users have NO option to change or see the password.
+   Fixed password: 1234. No JSONBin, server, or admin panel.
 ============================================================ */
 const Lock = (() => {
   const STORAGE_KEY   = 'ds_session_ok';
@@ -22,8 +20,8 @@ const Lock = (() => {
   const INACTIVITY_MS = 3 * 60 * 1000; // 3 minutes
   const MAX_ATTEMPTS  = 3;
 
-  // Default fallback hash (SHA-256 of "admin123") used if no remote hash found
-  const FALLBACK_HASH = '240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9';
+  // SHA-256 of the hardcoded password "1234"
+  const PASSWORD_HASH = '03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4';
 
   let inactivityTimer = null;
 
@@ -73,13 +71,9 @@ const Lock = (() => {
     } catch { return false; }
   }
 
-  /* ---- Get current valid hash (remote first, local fallback) ---- */
+  /* ---- Fixed local password; no network request is made ---- */
   async function getValidHash() {
-    const remote = await fetchHashFromJsonBin();
-    if (remote) return remote;
-    const local = localStorage.getItem('ds_pw_hash');
-    if (local) return local;
-    return FALLBACK_HASH;
+    return PASSWORD_HASH;
   }
 
   /* ---- Show lock screen ---- */
@@ -2822,9 +2816,10 @@ const mp = (() => {
 })();
 
 /* ============================================================
-   INIT — the app is open to everyone; no password is required.
+   INIT — show the local password lock before opening the app.
 ============================================================ */
 document.addEventListener('DOMContentLoaded', () => {
+  Lock.init();
   addDocument(false);   // two-sided
   addDocument(false);   // two-sided
 });
