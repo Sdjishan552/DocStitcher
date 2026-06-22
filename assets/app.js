@@ -1,12 +1,263 @@
 /* ============================================================
-   Document Stitcher - Pure Vanilla JS  v7.0
+   Document Stitcher - Pure Vanilla JS  v7.6
    Features:
    1. Multi-tool image editor (crop+rotate+flip+compress+convert at once)
    2. PDF input support with auto-detect + output options (pdf/jpg/png)
    3. Signature keyboard joystick placement (arrow keys)
    4. One-sided document cards with signature option
    5. Download format chooser (PDF/PNG/JPG) for every download
+   6. Password lock screen with inactivity timer (3 min)
+   7. Multi-person A4 passport layout (up to 4 persons)
 ============================================================ */
+
+/* ============================================================
+   LOCK SYSTEM
+   Password hash stored on JSONBin.io (free, owner-controlled).
+   Visitors only see the lock screen; only admin (with API key)
+   can change the password from the Admin panel.
+   Regular users have NO option to change or see the password.
+============================================================ */
+const Lock = (() => {
+  const STORAGE_KEY   = 'ds_session_ok';
+  const ATTEMPTS_KEY  = 'ds_attempts';
+  const INACTIVITY_MS = 3 * 60 * 1000; // 3 minutes
+  const MAX_ATTEMPTS  = 3;
+
+  // Default fallback hash (SHA-256 of "admin123") used if no remote hash found
+  const FALLBACK_HASH = '240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9';
+
+  let inactivityTimer = null;
+
+  /* ---- Simple SHA-256 via SubtleCrypto ---- */
+  async function sha256(str) {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+  }
+
+  /* ---- Fetch stored hash from JSONBin.io ---- */
+  async function fetchHashFromJsonBin() {
+    const binId  = localStorage.getItem('ds_jsonbin_id');
+    const apiKey = localStorage.getItem('ds_jsonbin_key');
+    if (!binId || !apiKey) return null;
+    try {
+      const r = await fetch(`https://api.jsonbin.io/v3/b/${binId}/latest`, {
+        headers: { 'X-Master-Key': apiKey },
+        cache: 'no-store'
+      });
+      if (!r.ok) return null;
+      const data = await r.json();
+      return data.record && data.record.hash ? data.record.hash : null;
+    } catch { return null; }
+  }
+
+  /* ---- Save hash to JSONBin.io ---- */
+  async function saveHashToJsonBin(hash) {
+    const binId  = localStorage.getItem('ds_jsonbin_id');
+    const apiKey = localStorage.getItem('ds_jsonbin_key');
+    if (!binId || !apiKey) return false;
+    try {
+      const r = await fetch(`https://api.jsonbin.io/v3/b/${binId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'X-Master-Key': apiKey },
+        body: JSON.stringify({ hash })
+      });
+      return r.ok;
+    } catch { return false; }
+  }
+
+  /* ---- Get current valid hash (remote first, local fallback) ---- */
+  async function getValidHash() {
+    const remote = await fetchHashFromJsonBin();
+    if (remote) return remote;
+    const local = localStorage.getItem('ds_pw_hash');
+    if (local) return local;
+    return FALLBACK_HASH;
+  }
+
+  /* ---- Show lock screen ---- */
+  function showLock() {
+    sessionStorage.removeItem(STORAGE_KEY);
+    const ls = document.getElementById('lockScreen');
+    if (ls) { ls.style.display = 'flex'; }
+    const inp = document.getElementById('lockInput');
+    if (inp) { inp.value = ''; inp.focus(); }
+    const errEl = document.getElementById('lockError');
+    if (errEl) errEl.textContent = '';
+    // Never show attempt count to users
+    const attemptEl = document.getElementById('lockAttemptMsg');
+    if (attemptEl) attemptEl.textContent = '';
+  }
+
+  /* ---- Unlock: verify password ---- */
+  async function submit() {
+    const inp = document.getElementById('lockInput');
+    const val = inp ? inp.value : '';
+    if (!val) { showError('Please enter the password.'); return; }
+
+    const attempts = parseInt(sessionStorage.getItem(ATTEMPTS_KEY) || '0');
+    const hash = await sha256(val);
+    const valid = await getValidHash();
+
+    if (hash === valid) {
+      sessionStorage.setItem(STORAGE_KEY, '1');
+      sessionStorage.removeItem(ATTEMPTS_KEY);
+      document.getElementById('lockScreen').style.display = 'none';
+      resetInactivity();
+    } else {
+      const newAttempts = attempts + 1;
+      sessionStorage.setItem(ATTEMPTS_KEY, String(newAttempts));
+      if (newAttempts >= MAX_ATTEMPTS) {
+        sessionStorage.removeItem(ATTEMPTS_KEY);
+        triggerFunnyVideo();
+      } else {
+        showError('Wrong password. Please try again.');
+      }
+      inp.value = '';
+    }
+  }
+
+  function showError(msg) {
+    const el = document.getElementById('lockError');
+    if (el) el.textContent = msg;
+  }
+
+  /* ---- Funny video after 3 wrong attempts ---- */
+  function triggerFunnyVideo() {
+    const overlay = document.getElementById('rickrollOverlay');
+    const vid     = document.getElementById('funnyVideo');
+    if (!overlay || !vid) { showLock(); return; }
+
+    // Clear any error message
+    const errEl = document.getElementById('lockError');
+    if (errEl) errEl.textContent = '';
+
+    overlay.style.display = 'flex';
+    vid.currentTime = 0;
+    vid.play().catch(() => {});
+
+    // When video ends naturally → go back to lock
+    vid.onended = () => {
+      overlay.style.display = 'none';
+      vid.pause();
+      showLock();
+    };
+
+    // Safety fallback: max 10 minutes, then back to lock regardless
+    const fallbackTimer = setTimeout(() => {
+      overlay.style.display = 'none';
+      vid.pause();
+      showLock();
+    }, 10 * 60 * 1000);
+
+    // Clear fallback timer if video ends naturally before timeout
+    vid.onended = () => {
+      clearTimeout(fallbackTimer);
+      overlay.style.display = 'none';
+      vid.pause();
+      showLock();
+    };
+  }
+
+  /* ---- Inactivity timer ---- */
+  function resetInactivity() {
+    clearTimeout(inactivityTimer);
+    if (sessionStorage.getItem(STORAGE_KEY) !== '1') return;
+    inactivityTimer = setTimeout(() => { showLock(); }, INACTIVITY_MS);
+  }
+
+  function bindActivity() {
+    ['mousemove','mousedown','keydown','touchstart','scroll','click'].forEach(ev => {
+      document.addEventListener(ev, resetInactivity, {passive:true});
+    });
+  }
+
+  /* ---- Init ---- */
+  async function init() {
+    bindActivity();
+    const unlocked = sessionStorage.getItem(STORAGE_KEY) === '1';
+    if (!unlocked) {
+      showLock();
+    } else {
+      resetInactivity();
+    }
+  }
+
+  return { init, submit, showLock, resetInactivity, saveHashToJsonBin, sha256, getValidHash };
+})();
+
+/* ============================================================
+   ADMIN PANEL  (only visible to someone who already knows the password)
+   Regular users have no access to this panel.
+============================================================ */
+const Admin = (() => {
+  function open() {
+    if (sessionStorage.getItem('ds_session_ok') !== '1') {
+      alert('Please unlock the app first.');
+      return;
+    }
+    const panel = document.getElementById('adminPanel');
+    if (!panel) return;
+    panel.style.display = 'flex';
+    // Pre-fill saved JSONBin settings (only visible in admin's browser)
+    const bi = document.getElementById('adminBinId');
+    const bk = document.getElementById('adminBinKey');
+    if (bi) bi.value = localStorage.getItem('ds_jsonbin_id') || '';
+    if (bk) bk.value = localStorage.getItem('ds_jsonbin_key') || '';
+    document.getElementById('adminMsg').textContent = '';
+  }
+
+  function close() {
+    const panel = document.getElementById('adminPanel');
+    if (panel) panel.style.display = 'none';
+  }
+
+  async function save() {
+    const cur     = document.getElementById('adminCurrentPw').value;
+    const newPw   = document.getElementById('adminNewPw').value;
+    const confirm = document.getElementById('adminConfirmPw').value;
+    const binId   = document.getElementById('adminBinId').value.trim();
+    const binKey  = document.getElementById('adminBinKey').value.trim();
+    const msgEl   = document.getElementById('adminMsg');
+
+    if (!cur || !newPw || !confirm) { setMsg('All fields required.', '#ff6b6b'); return; }
+    if (newPw.length < 4) { setMsg('Password must be ≥ 4 characters.', '#ff6b6b'); return; }
+    if (newPw !== confirm) { setMsg('New passwords do not match.', '#ff6b6b'); return; }
+
+    // Verify current password
+    const curHash = await Lock.sha256(cur);
+    const valid   = await Lock.getValidHash();
+    if (curHash !== valid) { setMsg('Current password is wrong.', '#ff6b6b'); return; }
+
+    // Save JSONBin settings (only in admin's own browser)
+    if (binId)  localStorage.setItem('ds_jsonbin_id', binId);
+    if (binKey) localStorage.setItem('ds_jsonbin_key', binKey);
+
+    const newHash = await Lock.sha256(newPw);
+    // Try JSONBin first, fall back to localStorage
+    const saved = await Lock.saveHashToJsonBin(newHash);
+    localStorage.setItem('ds_pw_hash', newHash); // always save locally as backup too
+
+    if (saved) {
+      setMsg('✓ Password saved to JSONBin! All users will need the new password.', '#18a87a');
+    } else {
+      setMsg('✓ Password saved locally only (JSONBin update failed — check Bin ID & Master Key).', '#f0a830');
+    }
+
+    // Clear sensitive fields
+    document.getElementById('adminCurrentPw').value = '';
+    document.getElementById('adminNewPw').value = '';
+    document.getElementById('adminConfirmPw').value = '';
+  }
+
+  function setMsg(msg, color) {
+    const el = document.getElementById('adminMsg');
+    if (el) { el.textContent = msg; el.style.color = color; }
+  }
+
+  return { open, close, save };
+})();
+
+
 
 const A4_MM = {
   portrait:  [210, 297],
@@ -1493,33 +1744,28 @@ window.sdt = (() => {
     const corner = a4State.corner;   // tl tr bl br
     const dir    = a4State.imgDir;   // row | col
 
-    // 1. Natural (top-left, row-first) col,row for slot i
+    // 1. Natural (top-left) col,row for slot i
     let col, row;
     if(dir === 'row'){
       col = i % cols;
       row = Math.floor(i / cols);
     } else {
-      row = i % rows;
+      // Column-by-column: fill down first, then next column
       col = Math.floor(i / rows);
+      row = i % rows;
     }
 
     // 2. Mirror so image 0 is in the chosen corner.
-    //    flipH: reverse column index within the grid.
-    //    flipV: reverse row index within the grid.
     const flipH = (corner === 'tr' || corner === 'br');
     const flipV = (corner === 'bl' || corner === 'br');
     if(flipH) col = (cols - 1) - col;
     if(flipV) row = (rows - 1) - row;
 
     // 3. mm position using cell pitch so cells don't overlap.
-    //    Centre image inside its cell (matters for auto-fit mode).
     let xMM = marginMM + col*(cellW + gapMM) + (cellW - placedW)/2;
     let yMM = marginMM + row*(cellH + gapMM) + (cellH - placedH)/2;
 
-    // 4. For bottom corners, anchor the whole grid block to the bottom of the
-    //    printable area instead of the top.  We know the block height:
-    //    rows*(cellH+gapMM) - gapMM (subtract one trailing gap).
-    //    So shift all rows down by (areaH - blockH).
+    // 4. For bottom corners, anchor the whole grid block to the bottom.
     if(flipV){
       const pH = a4State.orient==='portrait'?297:210;
       const areaH = pH - marginMM*2;
@@ -2088,9 +2334,515 @@ if('serviceWorker'in navigator){
 }
 
 /* ============================================================
-   INIT
+   MULTI-PERSON A4 MODULE
+   Up to 4 persons, each with own image + crop/rotate/flip/resize.
+   All placed together on one A4 sheet.
+============================================================ */
+const mp = (() => {
+  let personCount = 4;
+  let orient = 'portrait';
+  let persons = []; // [{img, canvas, state, cropRect, cropDisplayRect, displayScale, dragging, startX, startY}]
+
+  function init() {
+    // Build persons array
+    persons = Array.from({length:4}, () => ({
+      img: null, canvas: null, resultCanvas: null,
+      state: freshState(),
+      cropDisplayRect: null, displayScale: 1,
+      dragging: false, startX: 0, startY: 0,
+      count: 4 // photos of this person on A4
+    }));
+    setPersonCount(4);
+  }
+
+  function freshState() {
+    return {rotateDeg:0, flipH:false, flipV:false, cropRect:null, quality:85,
+            hasCrop:false, sizeWmm:35, sizeHmm:45, photoCount:4};
+  }
+
+  function setPersonCount(n) {
+    personCount = n;
+    [1,2,3,4].forEach(i => {
+      const btn = document.getElementById('mpCount'+i);
+      if(btn) btn.classList.toggle('active', i===n);
+    });
+    renderPersonCards();
+    refreshPreview();
+  }
+
+  function setOrient(o) {
+    orient = o;
+    document.getElementById('mpOrientPortrait').classList.toggle('active', o==='portrait');
+    document.getElementById('mpOrientLandscape').classList.toggle('active', o==='landscape');
+    refreshPreview();
+  }
+
+  function renderPersonCards() {
+    const container = document.getElementById('mpPersonsContainer');
+    if (!container) return;
+    // Determine grid layout
+    const cols = personCount <= 1 ? 1 : 2;
+    container.style.gridTemplateColumns = cols > 1 ? '1fr 1fr' : '1fr';
+    container.innerHTML = '';
+
+    for (let pi = 0; pi < personCount; pi++) {
+      const p = persons[pi];
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.style.cssText = 'padding:18px;position:relative';
+      card.innerHTML = `
+        <div style="font-weight:700;font-size:13px;margin-bottom:12px;color:var(--accent)">
+          👤 Person ${pi+1}
+        </div>
+        ${p.img ? `
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+            <button class="btn-secondary" style="font-size:11px;padding:5px 10px" onclick="mp.rotate(${pi},-90)">↺ 90°L</button>
+            <button class="btn-secondary" style="font-size:11px;padding:5px 10px" onclick="mp.rotate(${pi},90)">↻ 90°R</button>
+            <button class="btn-ghost"     style="font-size:11px;padding:5px 10px" onclick="mp.flip(${pi},'h')">⇆H</button>
+            <button class="btn-ghost"     style="font-size:11px;padding:5px 10px" onclick="mp.flip(${pi},'v')">⇅V</button>
+            <button class="btn-ghost"     style="font-size:11px;padding:5px 10px;color:var(--danger)" onclick="mp.clearPerson(${pi})">✕ Clear</button>
+          </div>
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">Drag on image to crop</div>
+          <canvas id="mpCropCanvas${pi}" style="max-width:100%;border-radius:8px;cursor:crosshair;display:block;border:1.5px solid var(--border)"></canvas>
+          <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+            <button class="btn-secondary" style="font-size:11px;padding:5px 10px" onclick="mp.applyCrop(${pi})">✂ Apply Crop</button>
+            <button class="btn-ghost"     style="font-size:11px;padding:5px 10px" onclick="mp.clearCrop(${pi})">Clear Crop</button>
+          </div>
+          <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <span style="font-size:11.5px;color:var(--text-muted)">Size:</span>
+            <button class="btn-secondary size-preset-btn" onclick="mp.setSize(${pi},35,45,'mm')">3.5×4.5cm</button>
+            <button class="btn-secondary size-preset-btn" onclick="mp.setSize(${pi},50.8,50.8,'mm')">2×2in</button>
+            <input type="number" id="mpW${pi}" value="${p.state.sizeWmm}" step="0.5" min="10" max="100" style="width:54px;padding:4px 6px;border:1.5px solid var(--border);border-radius:7px;font-size:12px" oninput="mp.setSizeRaw(${pi})">
+            <span style="font-size:11px">×</span>
+            <input type="number" id="mpH${pi}" value="${p.state.sizeHmm}" step="0.5" min="10" max="120" style="width:54px;padding:4px 6px;border:1.5px solid var(--border);border-radius:7px;font-size:12px" oninput="mp.setSizeRaw(${pi})">
+            <span style="font-size:11px;color:var(--text-muted)">mm</span>
+          </div>
+          <div style="margin-top:8px;display:flex;gap:6px;align-items:center">
+            <span style="font-size:11.5px;color:var(--text-muted)">Photos on A4:</span>
+            <button class="a4-count-btn" style="width:28px;height:28px;font-size:13px" onclick="mp.deltaCount(${pi},-1)">−</button>
+            <span id="mpPhCount${pi}" style="font-weight:700;color:var(--accent);min-width:20px;text-align:center">${p.state.photoCount}</span>
+            <button class="a4-count-btn" style="width:28px;height:28px;font-size:13px" onclick="mp.deltaCount(${pi},1)">+</button>
+          </div>
+          <div style="margin-top:8px">
+            <img id="mpPreview${pi}" alt="Person ${pi+1} preview" style="max-width:100%;max-height:120px;border-radius:6px;border:1px solid var(--border);object-fit:contain">
+          </div>
+        ` : `
+          <div class="drop-zone sdt-drop" style="min-height:140px" onclick="document.getElementById('mpFileInput${pi}').click()"
+               ondragover="event.preventDefault()" ondrop="mp.onDrop(event,${pi})">
+            <input type="file" id="mpFileInput${pi}" accept="image/*" style="display:none" onchange="mp.loadFile(${pi},this.files[0])">
+            <div class="sdt-placeholder">
+              <div class="drop-icon" style="font-size:28px">📷</div>
+              <div class="drop-label" style="font-size:13px">Click or drag photo here</div>
+              <div class="drop-hint">Person ${pi+1}</div>
+            </div>
+          </div>
+        `}
+      `;
+      container.appendChild(card);
+
+      if (p.img) {
+        setTimeout(() => {
+          renderPersonCanvas(pi);
+          bindCropEvents(pi);
+        }, 30);
+      }
+    }
+  }
+
+  function onDrop(event, pi) {
+    event.preventDefault();
+    const file = event.dataTransfer.files[0];
+    if (file && file.type.startsWith('image/')) loadFile(pi, file);
+  }
+
+  function loadFile(pi, file) {
+    if (!file || !file.type.startsWith('image/')) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+      const img = new Image();
+      img.onload = () => {
+        persons[pi].img = img;
+        persons[pi].state = freshState();
+        persons[pi].cropDisplayRect = null;
+        renderPersonCards();
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function clearPerson(pi) {
+    persons[pi].img = null;
+    persons[pi].resultCanvas = null;
+    persons[pi].state = freshState();
+    persons[pi].cropDisplayRect = null;
+    renderPersonCards();
+    refreshPreview();
+  }
+
+  function rotate(pi, deg) {
+    persons[pi].state.rotateDeg += deg;
+    persons[pi].cropDisplayRect = null;
+    persons[pi].state.cropRect = null;
+    persons[pi].state.hasCrop = false;
+    renderPersonCanvas(pi);
+    setTimeout(() => bindCropEvents(pi), 30);
+  }
+
+  function flip(pi, dir) {
+    if (dir === 'h') persons[pi].state.flipH = !persons[pi].state.flipH;
+    else persons[pi].state.flipV = !persons[pi].state.flipV;
+    renderPersonCanvas(pi);
+    setTimeout(() => bindCropEvents(pi), 30);
+  }
+
+  function applyCrop(pi) { renderPersonCanvas(pi); }
+
+  function clearCrop(pi) {
+    persons[pi].state.cropRect = null;
+    persons[pi].state.hasCrop = false;
+    persons[pi].cropDisplayRect = null;
+    renderPersonCanvas(pi);
+    setTimeout(() => bindCropEvents(pi), 30);
+  }
+
+  function setSize(pi, w, h, unit) {
+    const toMM = (v, u) => u==='mm'?v : u==='cm'?v*10 : u==='in'?v*25.4 : v*0.264583;
+    persons[pi].state.sizeWmm = toMM(w, unit);
+    persons[pi].state.sizeHmm = toMM(h, unit);
+    const wEl = document.getElementById('mpW'+pi);
+    const hEl = document.getElementById('mpH'+pi);
+    if (wEl) wEl.value = persons[pi].state.sizeWmm.toFixed(1);
+    if (hEl) hEl.value = persons[pi].state.sizeHmm.toFixed(1);
+    refreshPreview();
+  }
+
+  function setSizeRaw(pi) {
+    const w = parseFloat(document.getElementById('mpW'+pi)?.value);
+    const h = parseFloat(document.getElementById('mpH'+pi)?.value);
+    if (!isNaN(w) && w > 0) persons[pi].state.sizeWmm = w;
+    if (!isNaN(h) && h > 0) persons[pi].state.sizeHmm = h;
+    refreshPreview();
+  }
+
+  function deltaCount(pi, d) {
+    persons[pi].state.photoCount = Math.max(1, Math.min(20, persons[pi].state.photoCount + d));
+    const el = document.getElementById('mpPhCount'+pi);
+    if (el) el.textContent = persons[pi].state.photoCount;
+    refreshPreview();
+  }
+
+  function renderPersonCanvas(pi) {
+    const p = persons[pi];
+    if (!p.img) return;
+    const deg = ((p.state.rotateDeg % 360) + 360) % 360;
+    const swap = deg === 90 || deg === 270;
+    const srcW = p.img.naturalWidth, srcH = p.img.naturalHeight;
+    const rW = swap ? srcH : srcW, rH = swap ? srcW : srcH;
+
+    // Rotate
+    const rotC = document.createElement('canvas');
+    rotC.width = rW; rotC.height = rH;
+    const rCtx = rotC.getContext('2d');
+    rCtx.save(); rCtx.translate(rW/2, rH/2); rCtx.rotate(deg * Math.PI / 180);
+    rCtx.scale(p.state.flipH ? -1 : 1, p.state.flipV ? -1 : 1);
+    rCtx.drawImage(p.img, -srcW/2, -srcH/2); rCtx.restore();
+
+    // Crop
+    let cropSrc = rotC;
+    if (p.state.hasCrop && p.state.cropRect) {
+      const cr = p.state.cropRect;
+      const cOut = document.createElement('canvas');
+      cOut.width = Math.max(1, cr.w); cOut.height = Math.max(1, cr.h);
+      cOut.getContext('2d').drawImage(rotC, cr.x, cr.y, cr.w, cr.h, 0, 0, cr.w, cr.h);
+      cropSrc = cOut;
+    }
+
+    p.resultCanvas = cropSrc;
+
+    // Draw display canvas
+    const cv = document.getElementById('mpCropCanvas'+pi);
+    if (!cv) return;
+    const maxW = Math.min(cv.parentElement?.offsetWidth || 400, 460);
+    const scale = maxW / cropSrc.width;
+    p.displayScale = scale;
+    cv.width = Math.round(cropSrc.width * scale);
+    cv.height = Math.round(cropSrc.height * scale);
+    cv.style.width = cv.width + 'px'; cv.style.height = cv.height + 'px';
+    const ctx = cv.getContext('2d');
+    ctx.drawImage(cropSrc, 0, 0, cv.width, cv.height);
+
+    // Draw crop overlay
+    if (p.cropDisplayRect) {
+      const {x,y,w,h} = p.cropDisplayRect;
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.fillRect(0,0,cv.width,y); ctx.fillRect(0,y+h,cv.width,cv.height);
+      ctx.fillRect(0,y,x,h); ctx.fillRect(x+w,y,cv.width-x-w,h);
+      ctx.strokeStyle='rgba(249,107,63,1)'; ctx.lineWidth=2; ctx.setLineDash([5,4]);
+      ctx.strokeRect(x+0.5,y+0.5,w-1,h-1); ctx.setLineDash([]);
+    }
+
+    // Update preview img
+    const prevEl = document.getElementById('mpPreview'+pi);
+    if (prevEl) prevEl.src = cropSrc.toDataURL('image/jpeg', 0.85);
+
+    refreshPreview();
+  }
+
+  function bindCropEvents(pi) {
+    const cv = document.getElementById('mpCropCanvas'+pi);
+    if (!cv) return;
+    const p = persons[pi];
+
+    function getPos(clientX, clientY) {
+      const rect = cv.getBoundingClientRect();
+      const scaleX = cv.width / rect.width, scaleY = cv.height / rect.height;
+      return {x:(clientX-rect.left)*scaleX, y:(clientY-rect.top)*scaleY};
+    }
+
+    cv.onmousedown = e => {
+      e.preventDefault();
+      const pos = getPos(e.clientX, e.clientY);
+      p.dragging = true; p.startX = pos.x; p.startY = pos.y;
+      p.cropDisplayRect = null;
+    };
+    cv.onmousemove = e => {
+      if (!p.dragging) return;
+      const pos = getPos(e.clientX, e.clientY);
+      p.cropDisplayRect = {
+        x: Math.min(p.startX, pos.x), y: Math.min(p.startY, pos.y),
+        w: Math.abs(pos.x - p.startX), h: Math.abs(pos.y - p.startY)
+      };
+      renderPersonCanvas(pi);
+    };
+    cv.onmouseup = e => {
+      if (!p.dragging) return; p.dragging = false;
+      if (p.cropDisplayRect && p.cropDisplayRect.w > 4 && p.cropDisplayRect.h > 4) {
+        p.state.cropRect = {
+          x: Math.round(p.cropDisplayRect.x / p.displayScale),
+          y: Math.round(p.cropDisplayRect.y / p.displayScale),
+          w: Math.round(p.cropDisplayRect.w / p.displayScale),
+          h: Math.round(p.cropDisplayRect.h / p.displayScale),
+        };
+        p.state.hasCrop = true;
+      }
+    };
+    cv.onmouseleave = () => { p.dragging = false; };
+
+    cv.ontouchstart = e => {
+      e.preventDefault();
+      const t = e.touches[0], pos = getPos(t.clientX, t.clientY);
+      p.dragging = true; p.startX = pos.x; p.startY = pos.y;
+      p.cropDisplayRect = null;
+    };
+    cv.ontouchmove = e => {
+      e.preventDefault();
+      if (!p.dragging) return;
+      const t = e.touches[0], pos = getPos(t.clientX, t.clientY);
+      p.cropDisplayRect = {
+        x: Math.min(p.startX, pos.x), y: Math.min(p.startY, pos.y),
+        w: Math.abs(pos.x - p.startX), h: Math.abs(pos.y - p.startY)
+      };
+      renderPersonCanvas(pi);
+    };
+    cv.ontouchend = () => {
+      if (!p.dragging) return; p.dragging = false;
+      if (p.cropDisplayRect && p.cropDisplayRect.w > 4 && p.cropDisplayRect.h > 4) {
+        p.state.cropRect = {
+          x: Math.round(p.cropDisplayRect.x / p.displayScale),
+          y: Math.round(p.cropDisplayRect.y / p.displayScale),
+          w: Math.round(p.cropDisplayRect.w / p.displayScale),
+          h: Math.round(p.cropDisplayRect.h / p.displayScale),
+        };
+        p.state.hasCrop = true;
+      }
+    };
+  }
+
+  /* ---- A4 combined preview ---- */
+  function refreshPreview() {
+    const cv = document.getElementById('mpA4Canvas');
+    if (!cv) return;
+    const marginMM = parseFloat(document.getElementById('mpMargin')?.value) || 8;
+    const gapMM    = parseFloat(document.getElementById('mpGap')?.value) || 2;
+    const pW = orient === 'portrait' ? 210 : 297;
+    const pH = orient === 'portrait' ? 297 : 210;
+    const PX = 2.2;
+    const cW = Math.round(pW * PX), cH = Math.round(pH * PX);
+    cv.width = cW; cv.height = cH;
+    cv.style.maxWidth = Math.min(cW, 360) + 'px';
+    const ctx = cv.getContext('2d');
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,cW,cH);
+
+    const areaW = pW - marginMM * 2;
+    const areaH = pH - marginMM * 2;
+
+    // Divide the A4 area into person sections (same as single-photo Passport layout logic)
+    let secCols, secRows;
+    if (personCount === 1) { secCols=1; secRows=1; }
+    else if (personCount === 2) { secCols=2; secRows=1; }
+    else { secCols=2; secRows=2; }
+
+    const secW = (areaW - (secCols-1)*gapMM) / secCols;
+    const secH = (areaH - (secRows-1)*gapMM) / secRows;
+
+    let labels = [];
+    let anyPhoto = false;
+
+    for (let si = 0; si < personCount; si++) {
+      const p = persons[si];
+      const secCol = si % secCols;
+      const secRow = Math.floor(si / secCols);
+      const secX = marginMM + secCol*(secW + gapMM);
+      const secY = marginMM + secRow*(secH + gapMM);
+
+      if (!p.resultCanvas) {
+        // Placeholder for person without photo
+        ctx.fillStyle = 'rgba(200,200,200,0.25)';
+        ctx.fillRect(Math.round(secX*PX), Math.round(secY*PX), Math.round(secW*PX), Math.round(secH*PX));
+        ctx.strokeStyle='rgba(108,99,255,0.2)'; ctx.lineWidth=0.8; ctx.setLineDash([5,4]);
+        ctx.strokeRect(Math.round(secX*PX)+0.5, Math.round(secY*PX)+0.5, Math.round(secW*PX)-1, Math.round(secH*PX)-1);
+        ctx.setLineDash([]);
+        ctx.fillStyle = 'rgba(130,130,160,0.7)';
+        ctx.font = `bold ${Math.round(Math.min(secW,secH)*PX*0.07)}px sans-serif`;
+        ctx.textAlign='center'; ctx.textBaseline='middle';
+        ctx.fillText(`Person ${si+1}`, Math.round((secX+secW/2)*PX), Math.round((secY+secH/2)*PX));
+        continue;
+      }
+      anyPhoto = true;
+
+      // Photos placed at EXACT passport size (not scaled to fill section)
+      const imgWmm = p.state.sizeWmm || 35;
+      const imgHmm = p.state.sizeHmm || 45;
+      const count  = p.state.photoCount || 4;
+
+      // Compute how many fit in this section at exact size
+      const g = computeExactGrid(secW, secH, imgWmm, imgHmm, gapMM, count);
+
+      for (let i = 0; i < Math.min(count, g.fitsInSection); i++) {
+        const col = i % g.cols;
+        const row = Math.floor(i / g.cols);
+        const xMM = secX + col*(imgWmm + gapMM);
+        const yMM = secY + row*(imgHmm + gapMM);
+        const px = Math.round(xMM*PX), py = Math.round(yMM*PX);
+        const pw2 = Math.round(imgWmm*PX), ph2 = Math.round(imgHmm*PX);
+        if (pw2 < 1 || ph2 < 1) continue;
+        ctx.drawImage(p.resultCanvas, px, py, pw2, ph2);
+        ctx.strokeStyle='rgba(160,160,185,0.55)'; ctx.lineWidth=0.6;
+        ctx.strokeRect(px+0.5, py+0.5, pw2-1, ph2-1);
+      }
+
+      // Section divider line (subtle)
+      ctx.strokeStyle='rgba(108,99,255,0.2)'; ctx.lineWidth=0.8; ctx.setLineDash([5,4]);
+      ctx.strokeRect(Math.round(secX*PX)+0.5, Math.round(secY*PX)+0.5, Math.round(secW*PX)-1, Math.round(secH*PX)-1);
+      ctx.setLineDash([]);
+
+      // Person label
+      ctx.fillStyle='rgba(108,99,255,0.65)';
+      ctx.font=`bold ${Math.round(Math.min(secW,secH)*PX*0.046)}px sans-serif`;
+      ctx.textAlign='left'; ctx.textBaseline='top';
+      ctx.fillText(`P${si+1}`, Math.round(secX*PX)+3, Math.round(secY*PX)+3);
+
+      const placed = Math.min(count, g.fitsInSection);
+      labels.push(`P${si+1}: ${placed} photo${placed>1?'s':''} @ ${imgWmm.toFixed(0)}×${imgHmm.toFixed(0)}mm`);
+    }
+
+    // Page border + margin guide
+    ctx.strokeStyle='rgba(108,99,255,0.4)'; ctx.lineWidth=1.5;
+    ctx.strokeRect(0.5,0.5,cW-1,cH-1);
+    const mPx = Math.round(marginMM*PX);
+    ctx.strokeStyle='rgba(108,99,255,0.15)'; ctx.lineWidth=0.7; ctx.setLineDash([4,4]);
+    ctx.strokeRect(mPx,mPx,cW-mPx*2,cH-mPx*2); ctx.setLineDash([]);
+
+    const infoEl = document.getElementById('mpA4Info');
+    if (!anyPhoto) {
+      if (infoEl) infoEl.textContent = 'Upload photos for persons above to see preview.';
+    } else {
+      if (infoEl) infoEl.textContent = labels.join(' · ');
+    }
+  }
+
+  /* Place photos at their EXACT mm size. Find best cols/rows so they all fit.
+     Returns {cols, rows, fitsInSection} */
+  function computeExactGrid(secW, secH, imgWmm, imgHmm, gapMM, count) {
+    let bestCols = 1, bestRows = 1, bestFits = 0;
+    for (let cols = 1; cols <= count; cols++) {
+      const rows = Math.ceil(count / cols);
+      // Total space needed at exact size
+      const neededW = cols * imgWmm + Math.max(0, cols-1) * gapMM;
+      const neededH = rows * imgHmm + Math.max(0, rows-1) * gapMM;
+      if (neededW <= secW + 0.01 && neededH <= secH + 0.01) {
+        const fits = cols * rows;
+        if (fits > bestFits) { bestFits = fits; bestCols = cols; bestRows = rows; }
+      }
+    }
+    // If not even 1 fits at exact size, force 1 column and scale to fit
+    if (bestFits === 0) { bestCols = 1; bestRows = 1; bestFits = 1; }
+    return { cols: bestCols, rows: bestRows, fitsInSection: bestFits };
+  }
+
+  /* ---- Download ---- */
+  async function downloadPDF() {
+    if (!window.jspdf || !window.jspdf.jsPDF) { toast('PDF library not loaded.', 'error'); return; }
+    const activePeople = persons.slice(0, personCount);
+    if (!activePeople.some(p => p.resultCanvas)) { toast('Upload at least one person\'s photo.', 'error'); return; }
+
+    const {jsPDF} = window.jspdf;
+    const marginMM = parseFloat(document.getElementById('mpMargin')?.value) || 8;
+    const gapMM    = parseFloat(document.getElementById('mpGap')?.value) || 2;
+    const pW = orient === 'portrait' ? 210 : 297;
+    const pH = orient === 'portrait' ? 297 : 210;
+    const pdf = new jsPDF({orientation:orient, unit:'mm', format:'a4', compress:true});
+
+    const areaW = pW - marginMM * 2;
+    const areaH = pH - marginMM * 2;
+    let secCols = personCount <= 1 ? 1 : 2;
+    let secRows = personCount <= 2 ? 1 : 2;
+    const secW = (areaW - (secCols-1)*gapMM) / secCols;
+    const secH = (areaH - (secRows-1)*gapMM) / secRows;
+
+    for (let si = 0; si < personCount; si++) {
+      const p = persons[si];
+      if (!p.resultCanvas) continue;
+      const secCol = si % secCols;
+      const secRow = Math.floor(si / secCols);
+      const secX = marginMM + secCol*(secW + gapMM);
+      const secY = marginMM + secRow*(secH + gapMM);
+      const imgWmm = p.state.sizeWmm || 35;
+      const imgHmm = p.state.sizeHmm || 45;
+      const count  = p.state.photoCount || 4;
+      const g = computeExactGrid(secW, secH, imgWmm, imgHmm, gapMM, count);
+      const dataUrl = p.resultCanvas.toDataURL('image/jpeg', 0.9);
+
+      for (let i = 0; i < Math.min(count, g.fitsInSection); i++) {
+        const col = i % g.cols;
+        const row = Math.floor(i / g.cols);
+        const xMM = secX + col*(imgWmm + gapMM);
+        const yMM = secY + row*(imgHmm + gapMM);
+        pdf.addImage(dataUrl, 'JPEG', xMM, yMM, imgWmm, imgHmm, undefined, 'FAST');
+      }
+    }
+
+    const blob = pdf.output('blob');
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href=url; a.download='multiperson_a4.pdf';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 5000);
+    toast('Multi-person A4 PDF downloaded!');
+  }
+
+  document.addEventListener('DOMContentLoaded', init);
+
+  return {setPersonCount, setOrient, loadFile, onDrop, rotate, flip, applyCrop, clearCrop,
+          setSize, setSizeRaw, deltaCount, clearPerson, refreshPreview, downloadPDF};
+})();
+
+/* ============================================================
+   INIT — Lock screen must run first
 ============================================================ */
 document.addEventListener('DOMContentLoaded', () => {
+  Lock.init();
   addDocument(false);   // two-sided
   addDocument(false);   // two-sided
 });
+
