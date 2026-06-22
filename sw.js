@@ -1,4 +1,4 @@
-﻿const CACHE = 'docstitcher-v7.8';
+const CACHE = 'docstitcher-v7.9';
 const ASSETS = [
   '/',
   '/index.html',
@@ -25,5 +25,3 @@ self.addEventListener('fetch', e => {
     caches.match(e.request).then(cached => cached || fetch(e.request).catch(() => caches.match('/index.html')))
   );
 });
-
-
