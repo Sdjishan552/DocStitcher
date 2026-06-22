@@ -60,7 +60,7 @@
         <div style="display:flex;align-items:center;gap:8px">
           <button id="langToggleBtn" onclick="Lang.toggle()" title="Switch Language / ভাষা পরিবর্তন করুন">বাংলা</button>
           <button class="btn-ghost" id="helpBtn" onclick="toggleHelp()" data-i18n="helpBtn">Help</button>
-          <button class="btn-ghost" id="adminBtn" onclick="Admin.open()" title="Password Settings" style="font-size:18px;padding:4px 8px">🔐</button>
+          <button class="btn-ghost" id="adminBtn" onclick="Admin.open()" title="Admin password settings" style="display:none;font-size:18px;padding:4px 8px">🔐</button>
         </div>
       </header>
 
@@ -654,7 +654,7 @@
         <h3 style="font-family:'Space Grotesk',sans-serif;color:#fff;font-size:18px">🔐 Password Manager</h3>
         <button onclick="Admin.close()" style="color:rgba(255,255,255,0.5);font-size:22px;cursor:pointer;padding:4px">×</button>
       </div>
-      <p style="color:rgba(255,255,255,0.5);font-size:12.5px;margin-bottom:20px">Only you (the admin) can set or change the password. The new password syncs to all users via JSONBin.</p>
+      <p style="color:rgba(255,255,255,0.5);font-size:12.5px;margin-bottom:20px">This panel appears only on your admin device. Your JSONBin Master Key authorizes changes; friends using the normal shared link can unlock the app but cannot change its password.</p>
       <div style="margin-bottom:16px">
         <label style="color:rgba(255,255,255,0.6);font-size:12px;display:block;margin-bottom:6px">Current Password (to verify it's you)</label>
         <input id="adminCurrentPw" type="password" placeholder="Current password"
@@ -684,7 +684,7 @@
       <div style="margin-top:18px;padding-top:16px;border-top:1px solid rgba(255,255,255,0.1)">
         <p style="color:rgba(255,255,255,0.55);font-size:11.5px;margin-bottom:10px">
           📦 <strong style="color:rgba(255,255,255,0.75)">JSONBin.io</strong> — free remote storage so every user gets the new password automatically.<br>
-          <span style="color:rgba(255,255,255,0.35)">Sign up at <a href="https://jsonbin.io" target="_blank" style="color:#f96b3f">jsonbin.io</a> → create a bin → paste your Bin ID &amp; Master Key below.</span>
+          <span style="color:rgba(255,255,255,0.35)">Create a public-readable bin at <a href="https://jsonbin.io" target="_blank" style="color:#f96b3f">jsonbin.io</a>, then paste its Bin ID &amp; Master Key below. Share only the normal <strong>?bin=BIN_ID</strong> link—never your Master Key.</span>
         </p>
         <label style="color:rgba(255,255,255,0.4);font-size:11px;display:block;margin-bottom:5px">JSONBin Bin ID:</label>
         <input id="adminBinId" type="text" placeholder="e.g. 64abc123def456..."
@@ -692,7 +692,7 @@
         <label style="color:rgba(255,255,255,0.4);font-size:11px;display:block;margin-bottom:5px">JSONBin Master Key (X-Master-Key):</label>
         <input id="adminBinKey" type="password" placeholder="$2b$10$..."
           style="width:100%;padding:9px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.05);color:rgba(255,255,255,0.7);font-size:12px;outline:none;font-family:monospace">
-        <p style="color:rgba(255,255,255,0.22);font-size:10.5px;margin-top:8px">These are stored only in your browser's localStorage. Other users can never see them.</p>
+        <p style="color:rgba(255,255,255,0.22);font-size:10.5px;margin-top:8px">The Master Key stays only in this browser. Open the app once with <strong>?admin=setup&amp;bin=BIN_ID</strong> on your own device; friends use <strong>?bin=BIN_ID</strong>.</p>
       </div>
     </div>
   </div>
