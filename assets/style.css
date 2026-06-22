@@ -1277,3 +1277,47 @@ input[type=color] {
   width: 100%;
   text-align: center;
 }
+
+/* ============================================================
+   LOCK SCREEN & ADMIN
+============================================================ */
+#lockScreen {
+  display: none;
+}
+#lockScreen.active {
+  display: flex !important;
+}
+#rickrollOverlay {
+  display: none;
+}
+#adminPanel {
+  display: none;
+}
+#adminPanel.active {
+  display: flex !important;
+}
+
+/* ============================================================
+   MULTI-PERSON A4
+============================================================ */
+#mpPersonsContainer {
+  display: grid;
+  gap: 18px;
+}
+#tab-multiperson .a4-preview-wrap {
+  background: #f0f0f0;
+  border-radius: 12px;
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+}
+#tab-multiperson .a4-preview-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
