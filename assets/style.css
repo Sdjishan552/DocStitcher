@@ -1321,3 +1321,41 @@ input[type=color] {
   letter-spacing: 0.5px;
   margin-bottom: 8px;
 }
+
+.mp-bg-tools {
+  margin-top: 12px;
+  padding: 11px;
+  border: 1px solid rgba(124, 58, 237, 0.18);
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(224,102,255,0.07), rgba(124,58,237,0.05));
+}
+.mp-bg-heading, .mp-bg-actions, .mp-bg-palette {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.mp-bg-heading { justify-content: space-between; font-size: 11.5px; font-weight: 700; }
+.mp-bg-actions { margin-top: 8px; }
+.mp-remove-bg, .mp-restore-bg { padding: 6px 10px; font-size: 11px; }
+.mp-remove-bg { background: linear-gradient(135deg,#e066ff,#7c3aed); box-shadow: none; }
+.mp-bg-status { min-height: 16px; margin-top: 7px; font-size: 10.5px; color: var(--text-muted); }
+.mp-bg-status.error { color: var(--danger); }
+.mp-bg-palette { margin-top: 7px; }
+.mp-bg-swatch, .mp-bg-custom {
+  width: 29px;
+  height: 29px;
+  border: 2px solid var(--border);
+  border-radius: 7px;
+  background: var(--swatch);
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(30,44,64,0.08);
+}
+.mp-bg-swatch.active { border-color: #7c3aed; box-shadow: 0 0 0 2px rgba(124,58,237,0.15); }
+.mp-bg-swatch.checker { background: repeating-conic-gradient(#ccc 0% 25%,#fff 0% 50%) 0 0/12px 12px; }
+.mp-bg-custom { display:inline-flex; align-items:center; justify-content:center; position:relative; background:#fff; }
+.mp-bg-custom input { position:absolute; width:1px; height:1px; opacity:0; }
+
+@media (max-width: 760px) {
+  #mpPersonsContainer { grid-template-columns: 1fr !important; }
+}
