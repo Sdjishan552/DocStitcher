@@ -275,6 +275,8 @@ button { border: 0; background: transparent; }
 .ctrl-group { display: flex; flex-direction: column; gap: 7px; }
 .ctrl-row { display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap; }
 .ctrl-row .ctrl-group { flex: 1; min-width: 140px; }
+.bg-engine-row { display: flex; max-width: 320px; margin-bottom: 14px; }
+.bg-engine-row .ctrl-group { width: 100%; }
 .ctrl-label {
   font-size: 11.5px; font-weight: 700; font-family: var(--font-display);
   color: var(--text-muted); letter-spacing: 0.05em; text-transform: uppercase;
