@@ -1435,28 +1435,54 @@ window.sdt = (() => {
     return null;
   }
 
-  // Compute grid: returns {cols, rows, placedW, placedH, cellW, cellH}
-  function computeA4Grid(pW, pH, imgWmm, imgHmm, marginMM, gapMM, count){
-    const areaW=pW-marginMM*2;
-    const areaH=pH-marginMM*2;
-    let bestCols=1, bestRows=1, bestScale=0;
-    for(let cols=1;cols<=count;cols++){
-      const rows=Math.ceil(count/cols);
-      // only consider valid grids (not way more cells than needed)
-      if(cols*rows > count + cols) continue; // skip wasteful grids
-      const cellW=(areaW-Math.max(0,cols-1)*gapMM)/cols;
-      const cellH=(areaH-Math.max(0,rows-1)*gapMM)/rows;
-      if(cellW<=0||cellH<=0) continue;
-      const scale=Math.min(cellW/imgWmm, cellH/imgHmm);
-      if(scale>bestScale){bestScale=scale;bestCols=cols;bestRows=rows;}
+  // Compute grid layout.
+  // sizedExact=true  → placedW/H are FIXED at imgWmm×imgHmm (user set a real-world size).
+  //                    Grid just figures out how many cols/rows fit without stretching.
+  // sizedExact=false → auto-fit: stretch images to fill available space as large as possible.
+  function computeA4Grid(pW, pH, imgWmm, imgHmm, marginMM, gapMM, count, sizedExact){
+    const areaW = pW - marginMM*2;
+    const areaH = pH - marginMM*2;
+
+    if(sizedExact){
+      // How many columns and rows fit at the EXACT specified size?
+      const maxCols = Math.max(1, Math.floor((areaW + gapMM) / (imgWmm + gapMM)));
+      const maxRows = Math.max(1, Math.floor((areaH + gapMM) / (imgHmm + gapMM)));
+      // We need enough cells for `count` images
+      const cols = Math.min(maxCols, count);
+      const rows = Math.min(maxRows, Math.ceil(count / cols));
+      // If user asks for more than fits, we still place as many as fit and warn
+      const fits = cols * rows;
+      return {
+        cols, rows,
+        placedW: imgWmm,   // EXACT — no scaling
+        placedH: imgHmm,
+        cellW:   imgWmm,
+        cellH:   imgHmm,
+        fitsOnPage: fits,
+        overflow: count > fits,
+      };
     }
-    const cellW=(areaW-Math.max(0,bestCols-1)*gapMM)/bestCols;
-    const cellH=(areaH-Math.max(0,bestRows-1)*gapMM)/bestRows;
-    const fitScale=Math.min(cellW/imgWmm, cellH/imgHmm);
+
+    // Auto-fit: find the grid layout that makes images as large as possible
+    let bestCols=1, bestRows=1, bestScale=0;
+    for(let cols=1; cols<=count; cols++){
+      const rows = Math.ceil(count/cols);
+      if(cols*rows > count + cols) continue;
+      const cellW = (areaW - Math.max(0,cols-1)*gapMM) / cols;
+      const cellH = (areaH - Math.max(0,rows-1)*gapMM) / rows;
+      if(cellW<=0 || cellH<=0) continue;
+      const scale = Math.min(cellW/imgWmm, cellH/imgHmm);
+      if(scale > bestScale){ bestScale=scale; bestCols=cols; bestRows=rows; }
+    }
+    const cellW = (areaW - Math.max(0,bestCols-1)*gapMM) / bestCols;
+    const cellH = (areaH - Math.max(0,bestRows-1)*gapMM) / bestRows;
+    const fitScale = Math.min(cellW/imgWmm, cellH/imgHmm);
     return {
-      cols:bestCols, rows:bestRows,
-      placedW:imgWmm*fitScale, placedH:imgHmm*fitScale,
+      cols: bestCols, rows: bestRows,
+      placedW: imgWmm*fitScale, placedH: imgHmm*fitScale,
       cellW, cellH,
+      fitsOnPage: bestCols*bestRows,
+      overflow: false,
     };
   }
 
@@ -1490,23 +1516,27 @@ window.sdt = (() => {
   function a4Preview(){
     if(!mtResultCanvas||!mtResultCanvas.width) return;
     const marginMM = parseFloat(document.getElementById('a4Margin')?.value)||8;
-    const gapMM    = parseFloat(document.getElementById('a4Gap')?.value);
+    const gapRaw   = parseFloat(document.getElementById('a4Gap')?.value);
+    const gapMM    = isNaN(gapRaw) ? 2 : Math.max(0, gapRaw);
     a4State.margin = marginMM;
-    a4State.gap    = isNaN(gapMM)?2:gapMM;
+    a4State.gap    = gapMM;
     const pW = a4State.orient==='portrait'?210:297;
     const pH = a4State.orient==='portrait'?297:210;
 
-    let imgWmm, imgHmm;
+    let imgWmm, imgHmm, sizedExact=false;
     const sized=getSizeMM();
-    if(sized){imgWmm=sized.w; imgHmm=sized.h;}
-    else {
+    if(sized){
+      imgWmm=sized.w; imgHmm=sized.h;
+      sizedExact=true;   // ← user specified real-world dimensions → honour them exactly
+    } else {
       const r=mtResultCanvas.width/mtResultCanvas.height;
       imgWmm=Math.min(80,(pW-marginMM*2));
       imgHmm=imgWmm/r;
     }
 
-    const count   = a4State.count;
-    const g       = computeA4Grid(pW,pH,imgWmm,imgHmm,marginMM,a4State.gap,count);
+    const count = a4State.count;
+    const g     = computeA4Grid(pW,pH,imgWmm,imgHmm,marginMM,gapMM,count,sizedExact);
+    const placeable = Math.min(count, g.fitsOnPage);
 
     const PX_PER_MM=2.2;
     const cW=Math.round(pW*PX_PER_MM), cH=Math.round(pH*PX_PER_MM);
@@ -1516,61 +1546,71 @@ window.sdt = (() => {
     const ctx=cv.getContext('2d');
     ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,cW,cH);
 
-    for(let i=0;i<count;i++){
-      const {xMM,yMM}=getImgPos(i,g,marginMM,a4State.gap,pW,pH);
+    for(let i=0;i<placeable;i++){
+      const {xMM,yMM}=getImgPos(i,g,marginMM,gapMM,pW,pH);
       const px=Math.round(xMM*PX_PER_MM), py=Math.round(yMM*PX_PER_MM);
       const pw2=Math.round(g.placedW*PX_PER_MM), ph2=Math.round(g.placedH*PX_PER_MM);
+      if(pw2<1||ph2<1) continue;
       ctx.drawImage(mtResultCanvas, px, py, pw2, ph2);
-      // thin photo border
       ctx.strokeStyle='rgba(160,160,185,0.6)'; ctx.lineWidth=0.6;
       ctx.strokeRect(px+0.5, py+0.5, pw2-1, ph2-1);
-      // number label on each photo
-      ctx.fillStyle='rgba(108,99,255,0.75)';
-      ctx.font=`bold ${Math.max(8,Math.round(ph2*0.12))}px sans-serif`;
+      // number label
+      const fs=Math.max(7, Math.round(Math.min(pw2,ph2)*0.13));
+      ctx.fillStyle='rgba(108,99,255,0.8)';
+      ctx.font=`bold ${fs}px sans-serif`;
       ctx.textAlign='left'; ctx.textBaseline='top';
-      ctx.fillText(i+1, px+3, py+3);
+      ctx.fillText(i+1, px+2, py+2);
     }
 
     // Page border
     ctx.strokeStyle='rgba(108,99,255,0.4)'; ctx.lineWidth=1.5;
     ctx.strokeRect(0.5,0.5,cW-1,cH-1);
-
-    // Margin guide (dashed)
+    // Margin guide
     const mPx=Math.round(marginMM*PX_PER_MM);
-    ctx.strokeStyle='rgba(108,99,255,0.2)'; ctx.lineWidth=0.7; ctx.setLineDash([4,4]);
+    ctx.strokeStyle='rgba(108,99,255,0.18)'; ctx.lineWidth=0.7; ctx.setLineDash([4,4]);
     ctx.strokeRect(mPx,mPx,cW-mPx*2,cH-mPx*2); ctx.setLineDash([]);
 
     const infoEl=document.getElementById('a4LayoutInfo');
-    if(infoEl) infoEl.textContent=
-      `${g.cols} col × ${g.rows} row · photo size ${g.placedW.toFixed(1)}×${g.placedH.toFixed(1)} mm · gap ${a4State.gap}mm · margin ${marginMM}mm`;
+    if(infoEl){
+      let msg = `${g.cols} col × ${g.rows} row · each photo ${g.placedW.toFixed(1)}×${g.placedH.toFixed(1)} mm`;
+      if(sizedExact) msg += ` (exact size)`;
+      if(gapMM>0) msg += ` · gap ${gapMM}mm`;
+      if(g.overflow) msg += ` ⚠ Only ${g.fitsOnPage} fit on this page at this size (asked for ${count})`;
+      infoEl.textContent = msg;
+      infoEl.style.color = g.overflow ? '#e04' : 'var(--text-muted)';
+    }
   }
 
   async function downloadA4PDF(){
     if(!mtResultCanvas||!mtResultCanvas.width){toast('Upload and edit an image first.','error');return;}
     if(!window.jspdf||!window.jspdf.jsPDF){toast('PDF library not loaded.','error');return;}
     const {jsPDF}=window.jspdf;
-    const marginMM=parseFloat(document.getElementById('a4Margin')?.value)||8;
-    const gapMM   =parseFloat(document.getElementById('a4Gap')?.value)||2;
+    const marginMM = parseFloat(document.getElementById('a4Margin')?.value)||8;
+    const gapRaw   = parseFloat(document.getElementById('a4Gap')?.value);
+    const gapMM    = isNaN(gapRaw)?2:Math.max(0,gapRaw);
     const pW=a4State.orient==='portrait'?210:297;
     const pH=a4State.orient==='portrait'?297:210;
 
-    let imgWmm,imgHmm;
+    let imgWmm,imgHmm,sizedExact=false;
     const sized=getSizeMM();
-    if(sized){imgWmm=sized.w;imgHmm=sized.h;}
+    if(sized){imgWmm=sized.w;imgHmm=sized.h;sizedExact=true;}
     else{const r=mtResultCanvas.width/mtResultCanvas.height;imgWmm=Math.min(80,(pW-marginMM*2));imgHmm=imgWmm/r;}
 
     const count=a4State.count;
-    const g=computeA4Grid(pW,pH,imgWmm,imgHmm,marginMM,gapMM,count);
+    const g=computeA4Grid(pW,pH,imgWmm,imgHmm,marginMM,gapMM,count,sizedExact);
+    const placeable=Math.min(count,g.fitsOnPage);
+
     const pdf=new jsPDF({orientation:a4State.orient,unit:'mm',format:'a4',compress:true});
     const qual=mtState.quality/100;
     const dataUrl=mtResultCanvas.toDataURL('image/jpeg',qual);
 
-    for(let i=0;i<count;i++){
+    for(let i=0;i<placeable;i++){
       const {xMM,yMM}=getImgPos(i,g,marginMM,gapMM,pW,pH);
       pdf.addImage(dataUrl,'JPEG',xMM,yMM,g.placedW,g.placedH,undefined,'FAST');
     }
     saveBlob(pdf.output('blob'),'passport_photos_a4.pdf');
-    toast('A4 PDF downloaded!');
+    if(g.overflow) toast(`PDF saved — only ${placeable} of ${count} fit at this size.`,'info');
+    else toast('A4 PDF downloaded!');
   }
 
   async function mtDownload() {
