@@ -16,7 +16,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,300;1,400&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-  <link rel="stylesheet" href="assets/style.css?v=7.14" />
+  <link rel="stylesheet" href="assets/style.css?v=7.15" />
   <style>
     /* Language toggle button */
     #langToggleBtn {
@@ -256,8 +256,8 @@
               <div class="ctrl-group">
                 <label class="ctrl-label" for="mtBgMode">Removal Method</label>
                 <select class="ctrl-select" id="mtBgMode" onchange="sdt.mtSetBgMode(this.value)">
-                  <option value="api">remove.bg API</option>
                   <option value="local">Built-in local AI</option>
+                  <option value="api">remove.bg API</option>
                 </select>
               </div>
             </div>
@@ -745,6 +745,6 @@
 
   <!-- i18n must load BEFORE app.js -->
   <script src="assets/i18n.js"></script>
-  <script src="assets/app.js?v=7.14"></script>
+  <script src="assets/app.js?v=7.15"></script>
 </body>
 </html>
