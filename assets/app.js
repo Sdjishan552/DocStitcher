@@ -1472,6 +1472,90 @@ window.sdt = (() => {
   let mtCropDragging=false, mtCropStartX=0, mtCropStartY=0;
   let mtDisplayScale=1, mtCropDisplayRect=null;
   let mtResultCanvas = document.createElement('canvas');
+  const REMOVE_BG_API_URL = 'https://api.remove.bg/v1.0/removebg';
+  const REMOVE_BG_API_KEY = 'tK4gdNqmJF55TqK3rVRyczzE';
+
+  function cloneMtState(state = mtState) {
+    return {
+      rotateDeg: state.rotateDeg,
+      flipH: state.flipH,
+      flipV: state.flipV,
+      cropRect: state.cropRect ? {...state.cropRect} : null,
+      quality: state.quality,
+      format: state.format,
+      maxW: state.maxW,
+      hasCrop: state.hasCrop,
+    };
+  }
+
+  function buildMtEditedSourceCanvas(image = mtOrigImg, state = mtState) {
+    if (!image) return null;
+    const deg = ((state.rotateDeg % 360) + 360) % 360;
+    const swap = deg === 90 || deg === 270;
+    const srcW = image.naturalWidth || image.width;
+    const srcH = image.naturalHeight || image.height;
+    const rW = swap ? srcH : srcW;
+    const rH = swap ? srcW : srcH;
+
+    const rotC = document.createElement('canvas');
+    rotC.width = Math.max(1, rW);
+    rotC.height = Math.max(1, rH);
+    const rotCtx = rotC.getContext('2d');
+    rotCtx.save();
+    rotCtx.translate(rotC.width / 2, rotC.height / 2);
+    rotCtx.rotate(deg * Math.PI / 180);
+    rotCtx.scale(state.flipH ? -1 : 1, state.flipV ? -1 : 1);
+    rotCtx.drawImage(image, -srcW / 2, -srcH / 2);
+    rotCtx.restore();
+
+    if (!state.hasCrop || !state.cropRect) return rotC;
+
+    const cr = state.cropRect;
+    const sx = Math.max(0, Math.min(cr.x, rotC.width - 1));
+    const sy = Math.max(0, Math.min(cr.y, rotC.height - 1));
+    const sw = Math.max(1, Math.min(cr.w, rotC.width - sx));
+    const sh = Math.max(1, Math.min(cr.h, rotC.height - sy));
+    const cropC = document.createElement('canvas');
+    cropC.width = sw;
+    cropC.height = sh;
+    cropC.getContext('2d').drawImage(rotC, sx, sy, sw, sh, 0, 0, sw, sh);
+    return cropC;
+  }
+
+  function canvasToBlob(canvas, type = 'image/png', quality = 0.95) {
+    return new Promise((resolve, reject) => {
+      canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Could not prepare the image for background removal.')), type, quality);
+    });
+  }
+
+  function canvasToLoadedImage(canvas) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('Could not prepare the edited image.'));
+      img.src = canvas.toDataURL('image/png');
+    });
+  }
+
+  function blobToCanvas(blob) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth || img.width;
+        canvas.height = img.naturalHeight || img.height;
+        canvas.getContext('2d').drawImage(img, 0, 0);
+        resolve(canvas);
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error('The background-removal result could not be read.'));
+      };
+      img.src = url;
+    });
+  }
 
   function loadMultiToolFile(file) {
     if(!file||(file.type&&!file.type.startsWith('image/')&&file.type!=='application/pdf'&&!file.name.endsWith('.pdf'))){
@@ -1752,9 +1836,7 @@ window.sdt = (() => {
   function mtSetFormat(val){mtState.format=val;renderMultiTool();}
   function mtSetMaxW(val){mtState.maxW=Number(val);document.getElementById('mtMaxWLabel').textContent=Number(val)===0?'Original':val+'px';upSlider(document.getElementById('mtMaxW'));renderMultiTool();}
   function mtReset(){
-    // If BG was removed, restore original first
-    if(_mtOrigImgBackup){mtOrigImg=_mtOrigImgBackup;_mtOrigImgBackup=null;}
-    _mtBgMask=null;_mtBgColor='transparent';
+    _mtBgMask=null;_mtBgRestoreSnapshot=null;_mtBgColor='transparent';
     const cr=document.getElementById('mtBgColorRow');if(cr)cr.style.display='none';
     const rb=document.getElementById('mtRestoreBgBtn');if(rb)rb.style.display='none';
     const st=document.getElementById('mtBgStatus');if(st)st.textContent='';
@@ -2395,9 +2477,56 @@ window.sdt = (() => {
   /* =====================================================================
      BACKGROUND REMOVAL — MediaPipe Selfie Segmentation (100% local)
      ===================================================================== */
-  let _mtBgMask = null;       // ImageData of alpha mask (same size as mtOrigImg)
-  let _mtOrigImgBackup = null; // backup of mtOrigImg before BG removal
+  let _mtBgMask = null;       // transparent cut-out canvas
+  let _mtBgRestoreSnapshot = null; // exact image + edit state before BG removal
   let _mtBgColor = 'transparent'; // current fill colour
+  let _mtBgMode = 'api';
+
+  function mtSetBgMode(mode) {
+    _mtBgMode = mode === 'local' ? 'local' : 'api';
+    const status = document.getElementById('mtBgStatus');
+    if (status) status.textContent = _mtBgMode === 'api'
+      ? 'remove.bg API selected. If it is unavailable, the built-in local remover will run.'
+      : 'Built-in local remover selected.';
+  }
+
+  async function removeBgWithApi(sourceCanvas) {
+    const blob = await canvasToBlob(sourceCanvas, 'image/png');
+    const form = new FormData();
+    form.append('image_file', blob, 'docstitcher-current.png');
+    form.append('size', 'auto');
+    form.append('format', 'png');
+
+    const response = await fetch(REMOVE_BG_API_URL, {
+      method: 'POST',
+      headers: {'X-Api-Key': REMOVE_BG_API_KEY},
+      body: form,
+    });
+
+    if (!response.ok) {
+      const details = await response.text().catch(() => '');
+      const error = new Error(`remove.bg API failed (${response.status}). ${details}`.trim());
+      error.status = response.status;
+      throw error;
+    }
+
+    return blobToCanvas(await response.blob());
+  }
+
+  async function removeBgWithLocal(sourceCanvas, onStatus) {
+    if (onStatus) onStatus('Loading the built-in AI person detector...');
+    return PersonBackground.remove(sourceCanvas, onStatus);
+  }
+
+  function bakeBackgroundResult() {
+    const keepQuality = mtState.quality;
+    const keepFormat = mtState.format;
+    const keepMaxW = mtState.maxW;
+    mtState = {rotateDeg:0,flipH:false,flipV:false,cropRect:null,quality:keepQuality,format:keepFormat,maxW:keepMaxW,hasCrop:false};
+    mtCropDisplayRect = null;
+    const cropBtn = document.getElementById('mtApplyCropBtn');
+    if (cropBtn) cropBtn.classList.remove('active-state');
+  }
 
   function _loadMediaPipe(cb) {
     if (window._mpSegmenter) { cb(window._mpSegmenter); return; }
@@ -2496,6 +2625,57 @@ window.sdt = (() => {
     });
   }
 
+  async function mtRemoveBg() {
+    if (!mtOrigImg) { toast('Upload an image first.', 'error'); return; }
+    const btn = document.getElementById('mtRemoveBgBtn');
+    const status = document.getElementById('mtBgStatus');
+    btn.disabled = true;
+    btn.textContent = 'Processing...';
+
+    try {
+      const baseImage = _mtBgRestoreSnapshot ? _mtBgRestoreSnapshot.img : mtOrigImg;
+      const baseState = _mtBgRestoreSnapshot ? _mtBgRestoreSnapshot.state : mtState;
+      const sourceCanvas = buildMtEditedSourceCanvas(baseImage, baseState);
+      if (!sourceCanvas) throw new Error('Could not prepare the current image.');
+
+      if (!_mtBgRestoreSnapshot) {
+        _mtBgRestoreSnapshot = {
+          img: mtOrigImg,
+          state: cloneMtState(mtState),
+          cropDisplayRect: mtCropDisplayRect ? {...mtCropDisplayRect} : null,
+        };
+      }
+
+      const mode = document.getElementById('mtBgMode')?.value || _mtBgMode;
+      if (mode === 'api') {
+        status.textContent = 'Uploading the current edited image to remove.bg...';
+        try {
+          _mtBgMask = await removeBgWithApi(sourceCanvas);
+        } catch (apiError) {
+          console.warn(apiError);
+          status.textContent = 'remove.bg API is unavailable or over limit. Switching to the built-in local remover...';
+          _mtBgMask = await removeBgWithLocal(sourceCanvas, message => { status.textContent = message; });
+        }
+      } else {
+        _mtBgMask = await removeBgWithLocal(sourceCanvas, message => { status.textContent = message; });
+      }
+
+      _mtBgColor = 'transparent';
+      bakeBackgroundResult();
+      _applyBgFill(_mtBgColor);
+
+      document.getElementById('mtBgColorRow').style.display = 'block';
+      document.getElementById('mtRestoreBgBtn').style.display = 'inline-flex';
+      status.textContent = 'Background removed from the current edited image. Pick a fill colour below, or keep transparent.';
+      btn.textContent = 'Re-run Removal';
+    } catch(e) {
+      status.textContent = 'Error: ' + e.message;
+      console.error(e);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
   function _applyBgFill(color) {
     if (!_mtBgMask) return;
     const W = _mtBgMask.width, H = _mtBgMask.height;
@@ -2528,6 +2708,7 @@ window.sdt = (() => {
         document.getElementById('mtFmt').value = 'png';
         mtState.format = 'png';
       }
+      document.getElementById('mtOrigDims').textContent = newImg.naturalWidth + 'x' + newImg.naturalHeight;
       renderMultiTool();
       setTimeout(bindMtCropEvents, 50);
     };
@@ -2549,14 +2730,22 @@ window.sdt = (() => {
   }
 
   function mtRestoreBg() {
-    if (!_mtOrigImgBackup) return;
-    mtOrigImg = _mtOrigImgBackup;
-    _mtOrigImgBackup = null;
+    if (!_mtBgRestoreSnapshot) return;
+    mtOrigImg = _mtBgRestoreSnapshot.img;
+    mtState = cloneMtState(_mtBgRestoreSnapshot.state);
+    mtCropDisplayRect = _mtBgRestoreSnapshot.cropDisplayRect ? {..._mtBgRestoreSnapshot.cropDisplayRect} : null;
+    _mtBgRestoreSnapshot = null;
     _mtBgMask = null;
     _mtBgColor = 'transparent';
     document.getElementById('mtBgColorRow').style.display = 'none';
     document.getElementById('mtRestoreBgBtn').style.display = 'none';
     document.getElementById('mtBgStatus').textContent = '';
+    document.getElementById('mtFmt').value = mtState.format;
+    document.getElementById('mtQual').value = mtState.quality;
+    document.getElementById('mtQualLabel').textContent = mtState.quality + '%';
+    document.getElementById('mtMaxW').value = mtState.maxW;
+    document.getElementById('mtMaxWLabel').textContent = mtState.maxW === 0 ? 'Original' : mtState.maxW + 'px';
+    document.getElementById('mtOrigDims').textContent = (mtOrigImg.naturalWidth || mtOrigImg.width) + 'x' + (mtOrigImg.naturalHeight || mtOrigImg.height);
     renderMultiTool();
     setTimeout(bindMtCropEvents, 50);
     toast('Original image restored.');
@@ -2565,7 +2754,7 @@ window.sdt = (() => {
 
   function clearMultiTool() {
     mtOrigFile=null;mtOrigImg=null;mtCropDisplayRect=null;
-    _mtBgMask=null;_mtOrigImgBackup=null;_mtBgColor='transparent';
+    _mtBgMask=null;_mtBgRestoreSnapshot=null;_mtBgColor='transparent';
     mtState={rotateDeg:0,flipH:false,flipV:false,cropRect:null,quality:85,format:'jpeg',maxW:0,hasCrop:false};
     document.getElementById('mtPlaceholder').style.display='flex';
     document.getElementById('mtDrop').style.display='flex';
@@ -2660,7 +2849,7 @@ window.sdt = (() => {
     bindMtCropEvents,
     mtSizeChanged,mtSizeUnitChanged,mtApplySizePreset,mtClearSize,
     setA4Orient,setA4Corner,setA4ImgDir,a4CountDelta,a4Preview,downloadA4PDF,
-    mtRemoveBg,mtFillBg,mtFillBgCustom,mtRestoreBg,
+    mtRemoveBg,mtSetBgMode,mtFillBg,mtFillBgCustom,mtRestoreBg,
     // Bulk PDF Builder
     bpAddFiles,bpDzDrop,bpDelete,bpMove,bpSortByName,bpReverseOrder,bpClearAll,
     bpLbOpen,bpLbNav,bpLbMove,bpLbDelete,bpLbClose,
