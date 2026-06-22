@@ -6,8 +6,7 @@
    3. Signature keyboard joystick placement (arrow keys)
    4. One-sided document cards with signature option
    5. Download format chooser (PDF/PNG/JPG) for every download
-   6. Password lock screen with inactivity timer (3 min)
-   7. Multi-person A4 passport layout (up to 4 persons)
+   6. Multi-person A4 passport layout (up to 4 persons)
 ============================================================ */
 
 /* ============================================================
@@ -2823,11 +2822,9 @@ const mp = (() => {
 })();
 
 /* ============================================================
-   INIT — Lock screen must run first
+   INIT — the app is open to everyone; no password is required.
 ============================================================ */
 document.addEventListener('DOMContentLoaded', () => {
-  Admin.init();
-  Lock.init();
   addDocument(false);   // two-sided
   addDocument(false);   // two-sided
 });
