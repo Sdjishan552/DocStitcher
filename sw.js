@@ -1,4 +1,4 @@
-const CACHE = 'docstitcher-v7.17';
+const CACHE = 'docstitcher-v7.18';
 const ASSETS = [
   '/',
   '/index.html',
