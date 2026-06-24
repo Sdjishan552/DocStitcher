@@ -112,7 +112,7 @@
 
       <div class="tab-bar fade-up">
         <button class="tab-btn active" onclick="sdt.switchTab('multitool',this)" data-i18n="tabMultiTool">✨ Multi-Tool Editor</button>
-        <button class="tab-btn" onclick="sdt.switchTab('multiperson',this)">👥 Multi-Person A4</button>
+        <button class="tab-btn" onclick="sdt.switchTab('multiperson',this)">📸 Photo Maker</button>
         <button class="tab-btn" onclick="sdt.switchTab('bulkpdf',this)">📚 Bulk PDF Builder</button>
         <button class="tab-btn" onclick="sdt.switchTab('watermark',this)" data-i18n="tabWatermark">Watermark</button>
       </div>
@@ -135,20 +135,19 @@
 
           <div id="mtEditor" style="display:none;margin-top:20px">
 
-            <!-- ROTATE / FLIP -->
-            <div class="mt-section-label" data-i18n="labelRotateFlip">Rotate &amp; Flip</div>
+            <!-- ROTATE -->
+            <div class="mt-section-label" data-i18n="labelRotateFlip">Rotate</div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
               <button class="btn-secondary" onclick="sdt.mtRotate(-90)" data-i18n="btnRotateL">↺ 90° Left</button>
               <button class="btn-secondary" onclick="sdt.mtRotate(90)" data-i18n="btnRotateR">↻ 90° Right</button>
-              <button class="btn-secondary" onclick="sdt.mtRotate(180)" data-i18n="btnRotate180">↕ 180°</button>
-              <button class="btn-ghost" onclick="sdt.mtFlip('h')" data-i18n="btnFlipH">⇆ Flip H</button>
-              <button class="btn-ghost" onclick="sdt.mtFlip('v')" data-i18n="btnFlipV">⇅ Flip V</button>
+              <input type="number" id="mtRotateFine" value="0" step="0.5" min="-45" max="45" style="width:72px;padding:7px 9px;border:1.5px solid var(--border);border-radius:8px;font-size:12px" oninput="sdt.mtSetRotation(this.value)">
+              <span id="mtRotateFineLabel" style="font-size:12px;color:var(--text-muted);align-self:center">0 deg</span>
             </div>
 
             <!-- CROP -->
             <div class="mt-section-label" data-i18n="labelCrop">Crop — drag on the image below to select area</div>
             <div class="crop-canvas-wrap" id="mtCropWrap" style="margin-bottom:10px; min-height:320px; background:var(--surface-2); border-radius:12px; display:flex; align-items:center; justify-content:center;">
-              <canvas id="mtCropCanvas" style="max-width:100%; border-radius:10px; cursor:crosshair; display:block; width:100%; height:auto;"></canvas>
+              <canvas id="mtCropCanvas" style="max-width:none; border-radius:10px; cursor:crosshair; display:block; touch-action:none;"></canvas>
             </div>
             <!-- Crop size readout -->
             <div id="mtCropInfo" style="font-size:11.5px;color:var(--text-muted);margin-bottom:8px;min-height:18px"></div>
@@ -163,7 +162,7 @@
               <div class="size-unit-group">
                 <label class="ctrl-label">Width</label>
                 <div style="display:flex;gap:6px;align-items:center">
-                  <input type="number" class="size-dim-input" id="mtSizeW" placeholder="e.g. 3.5" step="0.1" min="0.1" oninput="sdt.mtSizeChanged()">
+                  <input type="number" class="size-dim-input" id="mtSizeW" value="2.5" placeholder="e.g. 2.5" step="0.1" min="0.1" oninput="sdt.mtSizeChanged()">
                   <select class="ctrl-select size-unit-select" id="mtSizeUnitW" onchange="sdt.mtSizeUnitChanged('w')">
                     <option value="cm">cm</option>
                     <option value="mm">mm</option>
@@ -178,7 +177,7 @@
               <div class="size-unit-group">
                 <label class="ctrl-label">Height</label>
                 <div style="display:flex;gap:6px;align-items:center">
-                  <input type="number" class="size-dim-input" id="mtSizeH" placeholder="e.g. 4.5" step="0.1" min="0.1" oninput="sdt.mtSizeChanged()">
+                  <input type="number" class="size-dim-input" id="mtSizeH" value="3" placeholder="e.g. 3" step="0.1" min="0.1" oninput="sdt.mtSizeChanged()">
                   <select class="ctrl-select size-unit-select" id="mtSizeUnitH" onchange="sdt.mtSizeUnitChanged('h')">
                     <option value="cm">cm</option>
                     <option value="mm">mm</option>
@@ -189,9 +188,9 @@
               </div>
               <div class="size-unit-group" style="display:flex;align-items:flex-end;padding-bottom:2px">
                 <div style="display:flex;gap:6px;flex-wrap:wrap">
-                  <button class="btn-secondary size-preset-btn" onclick="sdt.mtApplySizePreset(3.5,4.5,'cm')">Passport 3.5×4.5cm</button>
+                  <button class="btn-secondary size-preset-btn" onclick="sdt.mtApplySizePreset(2.5,3,'cm')">Passport 2.5×3cm</button>
                   <button class="btn-secondary size-preset-btn" onclick="sdt.mtApplySizePreset(2,2,'in')">2×2 in (US)</button>
-                  <button class="btn-secondary size-preset-btn" onclick="sdt.mtApplySizePreset(35,45,'mm')">35×45mm (EU)</button>
+                  <button class="btn-secondary size-preset-btn" onclick="sdt.mtApplySizePreset(2.5,3,'cm')">2.5×3cm</button>
                   <button class="btn-ghost size-preset-btn" onclick="sdt.mtClearSize()">Clear Size</button>
                 </div>
               </div>
@@ -238,86 +237,7 @@
               <img id="mtPreview" alt="processed output" style="max-height:400px">
             </div>
 
-            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:28px">
-              <button class="btn-primary" onclick="sdt.mtDownload()" data-i18n="btnDownloadMt">⬇ Download</button>
-              <button class="btn-secondary" onclick="sdt.mtSendToApp()" data-i18n="btnSendToStitcher">→ Send to Stitcher</button>
-              <button class="btn-secondary" onclick="sdt.mtReset()">↺ Reset All</button>
-              <button class="btn-ghost" onclick="sdt.clearMultiTool()" data-i18n="btnClearMt">Clear</button>
-            </div>
-
-            <!-- ===== REMOVE BACKGROUND SECTION ===== -->
-            <div class="passport-section-divider" style="margin-top:10px">
-              <span>✂️ Remove Background (AI)</span>
-              <span class="passport-optional-badge">Optional</span>
-            </div>
-            <p style="font-size:12.5px;color:var(--text-muted);margin-bottom:14px">Choose remove.bg API or the built-in local AI. API mode uses the current edited image online; local mode stays in the browser.</p>
-
-            <div class="bg-engine-row">
-              <div class="ctrl-group">
-                <label class="ctrl-label" for="mtBgMode">Removal Method</label>
-                <select class="ctrl-select" id="mtBgMode" onchange="sdt.mtSetBgMode(this.value)">
-                  <option value="local">Built-in local AI</option>
-                  <option value="api">remove.bg API</option>
-                </select>
-              </div>
-            </div>
-
-            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px">
-              <button class="btn-primary" id="mtRemoveBgBtn" onclick="sdt.mtRemoveBg()" style="background:linear-gradient(135deg,#e066ff,#7c3aed);box-shadow:0 4px 14px rgba(180,80,255,0.35)">
-                ✨ Remove Background
-              </button>
-              <button class="btn-ghost" id="mtRestoreBgBtn" onclick="sdt.mtRestoreBg()" style="display:none">↩ Restore Original</button>
-            </div>
-
-            <div id="mtBgStatus" style="font-size:12px;color:var(--text-muted);margin-bottom:12px;min-height:18px"></div>
-
-            <!-- Fill colour palette — shown after removal -->
-            <div id="mtBgColorRow" style="display:none;margin-bottom:20px">
-              <div class="mt-section-label" style="margin-bottom:8px">🎨 Fill Background Colour</div>
-              <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-                <button class="bg-fill-btn active" data-color="transparent" onclick="sdt.mtFillBg('transparent',this)" title="Transparent / no fill" style="background:repeating-conic-gradient(#ccc 0% 25%,#fff 0% 50%) 0 0/16px 16px;border:2px solid var(--accent);width:36px;height:36px;border-radius:8px;cursor:pointer"></button>
-                <button class="bg-fill-btn" data-color="#ffffff" onclick="sdt.mtFillBg('#ffffff',this)" title="White" style="background:#ffffff;border:2px solid var(--border);width:36px;height:36px;border-radius:8px;cursor:pointer"></button>
-                <button class="bg-fill-btn" data-color="#87CEEB" onclick="sdt.mtFillBg('#87CEEB',this)" title="Sky Blue" style="background:#87CEEB;border:2px solid var(--border);width:36px;height:36px;border-radius:8px;cursor:pointer"></button>
-                <button class="bg-fill-btn" data-color="#b0d4f1" onclick="sdt.mtFillBg('#b0d4f1',this)" title="Light Blue" style="background:#b0d4f1;border:2px solid var(--border);width:36px;height:36px;border-radius:8px;cursor:pointer"></button>
-                <button class="bg-fill-btn" data-color="#f0f4ff" onclick="sdt.mtFillBg('#f0f4ff',this)" title="Off-White Blue" style="background:#f0f4ff;border:2px solid var(--border);width:36px;height:36px;border-radius:8px;cursor:pointer"></button>
-                <button class="bg-fill-btn" data-color="#e8f5e9" onclick="sdt.mtFillBg('#e8f5e9',this)" title="Mint Green" style="background:#e8f5e9;border:2px solid var(--border);width:36px;height:36px;border-radius:8px;cursor:pointer"></button>
-                <button class="bg-fill-btn" data-color="#fff9e6" onclick="sdt.mtFillBg('#fff9e6',this)" title="Cream" style="background:#fff9e6;border:2px solid var(--border);width:36px;height:36px;border-radius:8px;cursor:pointer"></button>
-                <button class="bg-fill-btn" data-color="#fce4ec" onclick="sdt.mtFillBg('#fce4ec',this)" title="Light Pink" style="background:#fce4ec;border:2px solid var(--border);width:36px;height:36px;border-radius:8px;cursor:pointer"></button>
-                <button class="bg-fill-btn" data-color="#eeeeee" onclick="sdt.mtFillBg('#eeeeee',this)" title="Light Grey" style="background:#eeeeee;border:2px solid var(--border);width:36px;height:36px;border-radius:8px;cursor:pointer"></button>
-                <button class="bg-fill-btn" data-color="#000000" onclick="sdt.mtFillBg('#000000',this)" title="Black" style="background:#000000;border:2px solid var(--border);width:36px;height:36px;border-radius:8px;cursor:pointer"></button>
-                <!-- Custom colour picker -->
-                <label title="Custom colour" style="width:36px;height:36px;border-radius:8px;border:2px solid var(--border);overflow:hidden;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:17px">
-                  🎨<input type="color" id="mtBgCustomColor" value="#4a90d9" oninput="sdt.mtFillBgCustom(this.value)" style="opacity:0;position:absolute;width:0;height:0">
-                </label>
-              </div>
-            </div>
-
-            <!-- ===== PASSPORT / A4 LAYOUT SECTION ===== -->
-            <div class="passport-section-divider">
-              <span>🪪 Passport Photo / A4 Print Layout</span>
-              <span class="passport-optional-badge">Optional</span>
-            </div>
-            <p style="font-size:12.5px;color:var(--text-muted);margin-bottom:16px">Place this image on an A4 page for printing — like a photocopy shop. Set size, count, and orientation, then download as PDF.</p>
-
-            <!-- Paper Size Selector -->
-            <div class="ctrl-row" style="margin-bottom:14px;gap:16px;flex-wrap:wrap;align-items:flex-end">
-              <div class="ctrl-group">
-                <label class="ctrl-label">🖨 Paper Size</label>
-                <div style="display:flex;gap:6px;flex-wrap:wrap">
-                  <button class="a4-orient-btn active" id="a4Paper_a4" onclick="sdt.setA4PaperSize('a4')">A4 (210×297mm)</button>
-                  <button class="a4-orient-btn" id="a4Paper_4x6" onclick="sdt.setA4PaperSize('4x6')">4×6 in (10.16×15.24cm)</button>
-                  <button class="a4-orient-btn" id="a4Paper_custom" onclick="sdt.setA4PaperSize('custom')">Custom</button>
-                </div>
-              </div>
-            </div>
-            <div id="a4CustomSizeRow" style="display:none;margin-bottom:14px;gap:10px;align-items:center;flex-wrap:wrap">
-              <label class="ctrl-label" style="margin:0">Custom Width (mm):</label>
-              <input type="number" id="a4CustomPW" value="210" min="50" max="600" step="1" style="width:72px;padding:6px 8px;border:1.5px solid var(--border);border-radius:8px;font-size:13px" oninput="sdt.setA4CustomDim()">
-              <label class="ctrl-label" style="margin:0">×  Height (mm):</label>
-              <input type="number" id="a4CustomPH" value="297" min="50" max="600" step="1" style="width:72px;padding:6px 8px;border:1.5px solid var(--border);border-radius:8px;font-size:13px" oninput="sdt.setA4CustomDim()">
-            </div>
-
-            <!-- Brightness Enhancement Slider (Photo Making) -->
+            <!-- BRIGHTNESS ENHANCEMENT -->
             <div class="mt-section-label">☀️ Photo Enhancement — Brightness &amp; Clarity</div>
             <div class="ctrl-row" style="margin-bottom:16px">
               <div class="ctrl-group" style="flex:1">
@@ -330,102 +250,11 @@
               </div>
             </div>
 
-            <!-- ROW 1: Page orientation + Image count -->
-            <div class="ctrl-row" style="margin-bottom:14px;gap:20px;flex-wrap:wrap">
-              <div class="ctrl-group">
-                <label class="ctrl-label">📄 Page Orientation</label>
-                <div style="display:flex;gap:8px">
-                  <button class="a4-orient-btn active" id="a4OrientPortrait" onclick="sdt.setA4Orient('portrait')">
-                    <svg width="12" height="16" viewBox="0 0 12 16" fill="none"><rect x="0.5" y="0.5" width="11" height="15" rx="1.5" stroke="currentColor" stroke-width="1.2"/></svg>
-                    Portrait
-                  </button>
-                  <button class="a4-orient-btn" id="a4OrientLandscape" onclick="sdt.setA4Orient('landscape')">
-                    <svg width="16" height="12" viewBox="0 0 16 12" fill="none"><rect x="0.5" y="0.5" width="15" height="11" rx="1.5" stroke="currentColor" stroke-width="1.2"/></svg>
-                    Landscape
-                  </button>
-                </div>
-              </div>
-
-              <div class="ctrl-group">
-                <label class="ctrl-label">🔢 Number of Photos</label>
-                <div style="display:flex;gap:8px;align-items:center">
-                  <button class="a4-count-btn" onclick="sdt.a4CountDelta(-1)">−</button>
-                  <span id="a4CountLabel" style="font-size:20px;font-weight:800;min-width:32px;text-align:center;color:var(--accent)">4</span>
-                  <button class="a4-count-btn" onclick="sdt.a4CountDelta(1)">+</button>
-                </div>
-              </div>
-
-              <div class="ctrl-group">
-                <label class="ctrl-label">↔ Gap Between Photos</label>
-                <div style="display:flex;gap:6px;align-items:center">
-                  <input type="number" id="a4Gap" value="2" step="0.5" min="0" max="15" style="width:64px;padding:6px 8px;border:1.5px solid var(--border);border-radius:8px;font-size:13px" oninput="sdt.a4Preview()">
-                  <span class="ctrl-label">mm</span>
-                </div>
-              </div>
-
-              <div class="ctrl-group">
-                <label class="ctrl-label">📐 Page Margin</label>
-                <div style="display:flex;gap:6px;align-items:center">
-                  <input type="number" id="a4Margin" value="8" step="0.5" min="3" max="25" style="width:64px;padding:6px 8px;border:1.5px solid var(--border);border-radius:8px;font-size:13px" oninput="sdt.a4Preview()">
-                  <span class="ctrl-label">mm</span>
-                </div>
-              </div>
-            </div>
-
-            <!-- ROW 2: Corner anchor + Image fill direction -->
-            <div class="ctrl-row" style="margin-bottom:18px;gap:20px;flex-wrap:wrap;align-items:flex-start">
-              <div class="ctrl-group">
-                <label class="ctrl-label">📌 Start Placing From</label>
-                <div class="a4-corner-grid">
-                  <button class="a4-corner-btn active" id="a4Corner_tl" onclick="sdt.setA4Corner('tl')" title="Top-Left">↖ Top-Left</button>
-                  <button class="a4-corner-btn"        id="a4Corner_tr" onclick="sdt.setA4Corner('tr')" title="Top-Right">↗ Top-Right</button>
-                  <button class="a4-corner-btn"        id="a4Corner_bl" onclick="sdt.setA4Corner('bl')" title="Bottom-Left">↙ Bot-Left</button>
-                  <button class="a4-corner-btn"        id="a4Corner_br" onclick="sdt.setA4Corner('br')" title="Bottom-Right">↘ Bot-Right</button>
-                </div>
-              </div>
-
-              <div class="ctrl-group">
-                <label class="ctrl-label">🔀 Fill Photos</label>
-                <div style="display:flex;gap:8px;flex-direction:column">
-                  <button class="a4-dir-btn active" id="a4DirRow" onclick="sdt.setA4ImgDir('row')">
-                    <svg width="32" height="18" viewBox="0 0 32 18" fill="none">
-                      <rect x="1" y="1" width="8" height="7" rx="1" fill="currentColor" opacity="0.8"/>
-                      <rect x="12" y="1" width="8" height="7" rx="1" fill="currentColor" opacity="0.5"/>
-                      <rect x="23" y="1" width="8" height="7" rx="1" fill="currentColor" opacity="0.3"/>
-                      <rect x="1" y="10" width="8" height="7" rx="1" fill="currentColor" opacity="0.2"/>
-                      <path d="M4 4 L28 4" stroke="currentColor" stroke-width="0.8" stroke-dasharray="3 2" opacity="0.4"/>
-                    </svg>
-                    Row by Row (→ then ↓)
-                  </button>
-                  <button class="a4-dir-btn" id="a4DirCol" onclick="sdt.setA4ImgDir('col')">
-                    <svg width="32" height="18" viewBox="0 0 32 18" fill="none">
-                      <rect x="1" y="1" width="8" height="7" rx="1" fill="currentColor" opacity="0.8"/>
-                      <rect x="1" y="10" width="8" height="7" rx="1" fill="currentColor" opacity="0.5"/>
-                      <rect x="12" y="1" width="8" height="7" rx="1" fill="currentColor" opacity="0.3"/>
-                      <rect x="12" y="10" width="8" height="7" rx="1" fill="currentColor" opacity="0.2"/>
-                      <path d="M5 2 L5 16" stroke="currentColor" stroke-width="0.8" stroke-dasharray="3 2" opacity="0.4"/>
-                    </svg>
-                    Column by Column (↓ then →)
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <!-- A4 Preview canvas -->
-            <div class="a4-preview-outer">
-              <div class="a4-preview-label">Live A4 Page Preview</div>
-              <div id="a4PreviewWrap" class="a4-preview-wrap">
-                <canvas id="a4PreviewCanvas"></canvas>
-              </div>
-              <div id="a4LayoutInfo" style="font-size:11.5px;color:var(--text-muted);margin-top:8px;text-align:center"></div>
-            </div>
-
-            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px">
-              <button class="btn-primary" onclick="sdt.downloadA4PDF()" style="background:linear-gradient(135deg,#6c63ff,#4a90d9);box-shadow:0 6px 20px rgba(108,99,255,0.35)">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle;margin-right:5px"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 18 15 15"/></svg>
-                Download A4 PDF
-              </button>
-              <button class="btn-secondary" onclick="sdt.a4Preview()">🔄 Refresh Preview</button>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:28px">
+              <button class="btn-primary" onclick="sdt.mtDownload()" data-i18n="btnDownloadMt">⬇ Download</button>
+              <button class="btn-secondary" onclick="sdt.mtSendToApp()" data-i18n="btnSendToStitcher">→ Send to Stitcher</button>
+              <button class="btn-secondary" onclick="sdt.mtReset()">↺ Reset All</button>
+              <button class="btn-ghost" onclick="sdt.clearMultiTool()" data-i18n="btnClearMt">Clear</button>
             </div>
 
           </div>
@@ -435,18 +264,18 @@
       <!-- MULTI-PERSON A4 TAB -->
       <div class="tool-section" id="tab-multiperson">
         <div class="card" style="padding:28px">
-          <div class="card-title">👥 Multi-Person A4 Passport Layout</div>
-          <p style="font-size:12.5px;color:var(--text-muted);margin-bottom:18px">Upload up to 4 different persons' photos. Each gets its own crop, rotate, flip and resize editor. All photos are then placed together on a single A4 sheet.</p>
+          <div class="card-title">📸 Photo Maker</div>
+          <p style="font-size:12.5px;color:var(--text-muted);margin-bottom:18px">Upload a photo, crop it, remove the background, then place it on a sheet. Add more persons as needed using the person count selector.</p>
 
           <!-- Person count selector -->
           <div class="ctrl-row" style="margin-bottom:18px;gap:16px;flex-wrap:wrap;align-items:center">
             <div class="ctrl-group">
               <label class="ctrl-label">👤 Number of Persons</label>
               <div style="display:flex;gap:8px">
-                <button class="a4-count-btn" onclick="mp.setPersonCount(1)" id="mpCount1" style="min-width:40px">1</button>
+                <button class="a4-count-btn active" onclick="mp.setPersonCount(1)" id="mpCount1" style="min-width:40px">1</button>
                 <button class="a4-count-btn" onclick="mp.setPersonCount(2)" id="mpCount2" style="min-width:40px">2</button>
                 <button class="a4-count-btn" onclick="mp.setPersonCount(3)" id="mpCount3" style="min-width:40px">3</button>
-                <button class="a4-count-btn active" onclick="mp.setPersonCount(4)" id="mpCount4" style="min-width:40px">4</button>
+                <button class="a4-count-btn" onclick="mp.setPersonCount(4)" id="mpCount4" style="min-width:40px">4</button>
               </div>
             </div>
             <div class="ctrl-group">
@@ -462,7 +291,7 @@
             </div>
             <div class="ctrl-group">
               <label class="ctrl-label">📐 Margin (mm)</label>
-              <input type="number" id="mpMargin" value="8" step="0.5" min="3" max="25" style="width:64px;padding:6px 8px;border:1.5px solid var(--border);border-radius:8px;font-size:13px" oninput="mp.refreshPreview()">
+              <input type="number" id="mpMargin" value="3" step="0.5" min="0" max="25" style="width:64px;padding:6px 8px;border:1.5px solid var(--border);border-radius:8px;font-size:13px" oninput="mp.refreshPreview()">
             </div>
           </div>
 
