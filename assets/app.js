@@ -1,6 +1,6 @@
 /* ============================================================
    Document Stitcher - Pure Vanilla JS  v7.7
-   Features: 
+   Features:  
    1. Multi-tool image editor (crop+rotate+flip+compress+convert at once)
    2. PDF input support with auto-detect + output options (pdf/jpg/png)
    3. Signature keyboard joystick placement (arrow keys)
