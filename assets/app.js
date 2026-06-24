@@ -1485,6 +1485,7 @@ window.sdt = (() => {
       format: state.format,
       maxW: state.maxW,
       hasCrop: state.hasCrop,
+      brightness: state.brightness || 0,
     };
   }
 
@@ -1605,9 +1606,52 @@ window.sdt = (() => {
     reader.readAsDataURL(file);
   }
 
+
+  function applyBrightnessFilter(ctx, w, h, level) {
+    // level: -100 to +100. Positive = enhance brightness/contrast/vibrance
+    const imgData = ctx.getImageData(0, 0, w, h);
+    const data = imgData.data;
+    const bAdj = level * 1.5;  // brightness offset
+    const contrast = 1 + level * 0.008;
+    const saturation = 1 + Math.max(0, level) * 0.012;
+    for (let i = 0; i < data.length; i += 4) {
+      let r = data[i], g = data[i+1], b = data[i+2];
+      // Contrast
+      r = (r - 128) * contrast + 128;
+      g = (g - 128) * contrast + 128;
+      b = (b - 128) * contrast + 128;
+      // Brightness
+      r += bAdj; g += bAdj; b += bAdj;
+      // Saturation (only for positive enhancement)
+      if (level > 0) {
+        const lum = 0.299*r + 0.587*g + 0.114*b;
+        r = lum + (r - lum) * saturation;
+        g = lum + (g - lum) * saturation;
+        b = lum + (b - lum) * saturation;
+      }
+      data[i]   = Math.max(0, Math.min(255, Math.round(r)));
+      data[i+1] = Math.max(0, Math.min(255, Math.round(g)));
+      data[i+2] = Math.max(0, Math.min(255, Math.round(b)));
+    }
+    ctx.putImageData(imgData, 0, 0);
+  }
+
+  function mtSetBrightness(val) {
+    mtState.brightness = parseInt(val);
+    const lbl = document.getElementById('mtBrightnessLabel');
+    if (lbl) lbl.textContent = (val >= 0 ? '+' : '') + val;
+    const sl = document.getElementById('mtBrightness');
+    if (sl) upSlider(sl);
+    if (mtOrigImg) renderMultiTool();
+  }
+
   function initMultiTool(img, file) {
     mtOrigFile=file; mtOrigImg=img;
-    mtState={rotateDeg:0,flipH:false,flipV:false,cropRect:null,quality:85,format:'jpeg',maxW:0,hasCrop:false};
+    mtState={rotateDeg:0,flipH:false,flipV:false,cropRect:null,quality:85,format:'jpeg',maxW:0,hasCrop:false,brightness:0};
+    const bSlider=document.getElementById('mtBrightness');
+    if(bSlider){bSlider.value=0;upSlider(bSlider);
+      const bLbl=document.getElementById('mtBrightnessLabel');
+      if(bLbl) bLbl.textContent='0';}
     document.getElementById('mtPlaceholder').style.display='none';
     document.getElementById('mtDrop').style.display='none';
     document.getElementById('mtEditor').style.display='block';
@@ -1647,6 +1691,10 @@ window.sdt = (() => {
     const fCtx=finalC.getContext('2d');
     if(mtState.format!=='png'){fCtx.fillStyle='#fff';fCtx.fillRect(0,0,finalW,finalH);}
     fCtx.drawImage(cropSrc,0,0,finalW,finalH);
+    // Step 4: Brightness/Enhancement
+    if(mtState.brightness && mtState.brightness !== 0) {
+      applyBrightnessFilter(fCtx, finalW, finalH, mtState.brightness);
+    }
     mtResultCanvas=finalC;
 
     // Preview
@@ -1901,7 +1949,52 @@ window.sdt = (() => {
   }
 
   /* ---- A4 LAYOUT ---- */
-  let a4State={orient:'portrait', count:4, margin:8, corner:'tl', imgDir:'row', gap:2};
+  // Paper sizes: [widthMM, heightMM]
+  const PAPER_SIZES = {
+    'a4':    [210, 297],
+    '4x6':   [101.6, 152.4],
+    'custom': null, // user-defined
+  };
+
+  let a4State={orient:'portrait', count:4, margin:8, corner:'tl', imgDir:'row', gap:2,
+               paperSize:'a4', customPW:210, customPH:297};
+
+  function getA4PageDims(){
+    const s = a4State.paperSize;
+    let bW, bH;
+    if(s === 'custom'){
+      bW = a4State.customPW || 210;
+      bH = a4State.customPH || 297;
+    } else {
+      const base = PAPER_SIZES[s] || PAPER_SIZES['a4'];
+      bW = base[0]; bH = base[1];
+    }
+    // Apply orientation
+    if(a4State.orient === 'landscape'){
+      return {pW: Math.max(bW,bH), pH: Math.min(bW,bH)};
+    } else {
+      return {pW: Math.min(bW,bH), pH: Math.max(bW,bH)};
+    }
+  }
+
+  function setA4PaperSize(sz){
+    a4State.paperSize = sz;
+    const customRow = document.getElementById('a4CustomSizeRow');
+    if(customRow) customRow.style.display = (sz==='custom') ? 'flex' : 'none';
+    ['a4','4x6','custom'].forEach(k=>{
+      const el=document.getElementById('a4Paper_'+k);
+      if(el) el.classList.toggle('active', k===sz);
+    });
+    a4Preview();
+  }
+
+  function setA4CustomDim(){
+    const wEl=document.getElementById('a4CustomPW');
+    const hEl=document.getElementById('a4CustomPH');
+    if(wEl) a4State.customPW = parseFloat(wEl.value)||210;
+    if(hEl) a4State.customPH = parseFloat(hEl.value)||297;
+    a4Preview();
+  }
 
   function setA4Orient(o){
     a4State.orient=o;
@@ -1919,8 +2012,10 @@ window.sdt = (() => {
   }
   function setA4ImgDir(d){
     a4State.imgDir=d;
-    document.getElementById('a4DirRow').classList.toggle('active',d==='row');
-    document.getElementById('a4DirCol').classList.toggle('active',d==='col');
+    const rowBtn = document.getElementById('a4DirRow');
+    const colBtn = document.getElementById('a4DirCol');
+    if(rowBtn){ rowBtn.classList.remove('active'); if(d==='row') rowBtn.classList.add('active'); }
+    if(colBtn){ colBtn.classList.remove('active'); if(d==='col') colBtn.classList.add('active'); }
     a4Preview();
   }
   function a4CountDelta(d){
@@ -2020,17 +2115,16 @@ window.sdt = (() => {
     let yMM = marginMM + row*(cellH + gapMM) + (cellH - placedH)/2;
 
     // 4. For bottom corners, anchor the whole grid block to the bottom.
+    const _pageDims = getA4PageDims();
     if(flipV){
-      const pH = a4State.orient==='portrait'?297:210;
-      const areaH = pH - marginMM*2;
+      const areaH = _pageDims.pH - marginMM*2;
       const blockH = rows*(cellH + gapMM) - gapMM;
       const shiftDown = areaH - blockH;
       yMM += shiftDown;
     }
     // Same logic for right-anchored columns.
     if(flipH){
-      const pW = a4State.orient==='portrait'?210:297;
-      const areaW = pW - marginMM*2;
+      const areaW = _pageDims.pW - marginMM*2;
       const blockW = cols*(cellW + gapMM) - gapMM;
       const shiftRight = areaW - blockW;
       xMM += shiftRight;
@@ -2046,8 +2140,7 @@ window.sdt = (() => {
     const gapMM    = isNaN(gapRaw) ? 2 : Math.max(0, gapRaw);
     a4State.margin = marginMM;
     a4State.gap    = gapMM;
-    const pW = a4State.orient==='portrait'?210:297;
-    const pH = a4State.orient==='portrait'?297:210;
+    const {pW, pH} = getA4PageDims();
 
     let imgWmm, imgHmm, sizedExact=false;
     const sized=getSizeMM();
@@ -2114,8 +2207,7 @@ window.sdt = (() => {
     const marginMM = parseFloat(document.getElementById('a4Margin')?.value)||8;
     const gapRaw   = parseFloat(document.getElementById('a4Gap')?.value);
     const gapMM    = isNaN(gapRaw)?2:Math.max(0,gapRaw);
-    const pW=a4State.orient==='portrait'?210:297;
-    const pH=a4State.orient==='portrait'?297:210;
+    const {pW, pH} = getA4PageDims();
 
     let imgWmm,imgHmm,sizedExact=false;
     const sized=getSizeMM();
@@ -2126,7 +2218,8 @@ window.sdt = (() => {
     const g=computeA4Grid(pW,pH,imgWmm,imgHmm,marginMM,gapMM,count,sizedExact);
     const placeable=Math.min(count,g.fitsOnPage);
 
-    const pdf=new jsPDF({orientation:a4State.orient,unit:'mm',format:'a4',compress:true});
+    const paperFmt = a4State.paperSize==='a4' ? 'a4' : [Math.min(pW,pH), Math.max(pW,pH)];
+    const pdf=new jsPDF({orientation:a4State.orient,unit:'mm',format:paperFmt,compress:true});
     const qual=mtState.quality/100;
     const dataUrl=mtResultCanvas.toDataURL('image/jpeg',qual);
 
@@ -2849,6 +2942,8 @@ window.sdt = (() => {
     bindMtCropEvents,
     mtSizeChanged,mtSizeUnitChanged,mtApplySizePreset,mtClearSize,
     setA4Orient,setA4Corner,setA4ImgDir,a4CountDelta,a4Preview,downloadA4PDF,
+    setA4PaperSize,setA4CustomDim,getA4PageDims,
+    mtSetBrightness,
     mtRemoveBg,mtSetBgMode,mtFillBg,mtFillBgCustom,mtRestoreBg,
     // Bulk PDF Builder
     bpAddFiles,bpDzDrop,bpDelete,bpMove,bpSortByName,bpReverseOrder,bpClearAll,
@@ -2965,7 +3060,57 @@ const PersonBackground = (() => {
 const mp = (() => {
   let personCount = 4;
   let orient = 'portrait';
+  let mpPaperSize = 'a4';   // 'a4' | '4x6' | 'custom'
+  let mpCustomPW = 210, mpCustomPH = 297;
+  let mpImgDir = 'row';   // 'row' | 'col'
+  let mpCorner = 'tl';    // 'tl' | 'tr' | 'bl' | 'br'
   let persons = []; // [{img, canvas, state, cropRect, cropDisplayRect, displayScale, dragging, startX, startY}]
+
+  const MP_PAPER_SIZES = {'a4':[210,297],'4x6':[101.6,152.4],'custom':null};
+
+  function getMpPageDims(){
+    let bW, bH;
+    if(mpPaperSize==='custom'){bW=mpCustomPW||210;bH=mpCustomPH||297;}
+    else{const b=MP_PAPER_SIZES[mpPaperSize]||[210,297];bW=b[0];bH=b[1];}
+    if(orient==='landscape') return {pW:Math.max(bW,bH),pH:Math.min(bW,bH)};
+    return {pW:Math.min(bW,bH),pH:Math.max(bW,bH)};
+  }
+
+  function setMpPaperSize(sz){
+    mpPaperSize=sz;
+    const cr=document.getElementById('mpCustomSizeRow');
+    if(cr) cr.style.display=(sz==='custom')?'flex':'none';
+    ['a4','4x6','custom'].forEach(k=>{
+      const el=document.getElementById('mpPaper_'+k);
+      if(el) el.classList.toggle('active',k===sz);
+    });
+    refreshPreview();
+  }
+
+  function setMpCustomDim(){
+    const wEl=document.getElementById('mpCustomPW'),hEl=document.getElementById('mpCustomPH');
+    if(wEl) mpCustomPW=parseFloat(wEl.value)||210;
+    if(hEl) mpCustomPH=parseFloat(hEl.value)||297;
+    refreshPreview();
+  }
+
+  function setMpImgDir(d){
+    mpImgDir=d;
+    const rBtn=document.getElementById('mpDirRow');
+    const cBtn=document.getElementById('mpDirCol');
+    if(rBtn){ rBtn.classList.remove('active'); if(d==='row') rBtn.classList.add('active'); }
+    if(cBtn){ cBtn.classList.remove('active'); if(d==='col') cBtn.classList.add('active'); }
+    refreshPreview();
+  }
+
+  function setMpCorner(c){
+    mpCorner=c;
+    ['tl','tr','bl','br'].forEach(k=>{
+      const el=document.getElementById('mpCorner_'+k);
+      if(el) el.classList.toggle('active',k===c);
+    });
+    refreshPreview();
+  }
 
   function init() {
     // Build persons array
@@ -2982,7 +3127,7 @@ const mp = (() => {
 
   function freshState() {
     return {rotateDeg:0, flipH:false, flipV:false, cropRect:null, quality:85,
-            hasCrop:false, sizeWmm:35, sizeHmm:45, photoCount:4};
+            hasCrop:false, sizeWmm:35, sizeHmm:45, photoCount:4, brightness:0};
   }
 
   function setPersonCount(n) {
@@ -3070,6 +3215,16 @@ const mp = (() => {
             <button class="a4-count-btn" style="width:28px;height:28px;font-size:13px" onclick="mp.deltaCount(${pi},-1)">−</button>
             <span id="mpPhCount${pi}" style="font-weight:700;color:var(--accent);min-width:20px;text-align:center">${p.state.photoCount}</span>
             <button class="a4-count-btn" style="width:28px;height:28px;font-size:13px" onclick="mp.deltaCount(${pi},1)">+</button>
+          </div>
+          <div style="margin-top:10px">
+            <div style="font-size:11.5px;color:var(--text-muted);margin-bottom:4px">☀️ Photo Enhancement</div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <input type="range" id="mpBrightness${pi}" min="-100" max="100" value="${p.state.brightness||0}" step="1"
+                oninput="mp.mpSetBrightness(${pi},this.value)"
+                style="flex:1;accent-color:var(--accent)">
+              <span id="mpBrightnessLabel${pi}" style="font-size:11px;font-weight:600;min-width:28px;color:var(--accent)">${(p.state.brightness||0)>=0?'+'+( p.state.brightness||0):(p.state.brightness||0)}</span>
+            </div>
+            <div style="font-size:10px;color:var(--text-muted);margin-top:2px">Darken ← 0 = Original → Enhance</div>
           </div>
           <div style="margin-top:8px">
             <img id="mpPreview${pi}" alt="Person ${pi+1} preview" style="max-width:100%;max-height:120px;border-radius:6px;border:1px solid var(--border);object-fit:contain">
@@ -3295,6 +3450,36 @@ const mp = (() => {
     refreshPreview();
   }
 
+  function mpApplyBrightness(ctx, w, h, level) {
+    const imgData = ctx.getImageData(0, 0, w, h);
+    const data = imgData.data;
+    const bAdj = level * 1.5;
+    const contrast = 1 + level * 0.008;
+    const saturation = 1 + Math.max(0, level) * 0.012;
+    for (let i = 0; i < data.length; i += 4) {
+      let r = data[i], g = data[i+1], b = data[i+2];
+      r = (r-128)*contrast+128; g = (g-128)*contrast+128; b = (b-128)*contrast+128;
+      r += bAdj; g += bAdj; b += bAdj;
+      if (level > 0) {
+        const lum = 0.299*r + 0.587*g + 0.114*b;
+        r = lum+(r-lum)*saturation; g = lum+(g-lum)*saturation; b = lum+(b-lum)*saturation;
+      }
+      data[i]=Math.max(0,Math.min(255,Math.round(r)));
+      data[i+1]=Math.max(0,Math.min(255,Math.round(g)));
+      data[i+2]=Math.max(0,Math.min(255,Math.round(b)));
+    }
+    ctx.putImageData(imgData, 0, 0);
+  }
+
+  function mpSetBrightness(pi, val) {
+    const p = persons[pi];
+    if (!p) return;
+    p.state.brightness = parseInt(val);
+    const lbl = document.getElementById('mpBrightnessLabel'+pi);
+    if (lbl) lbl.textContent = (val >= 0 ? '+' : '') + val;
+    renderPersonCanvas(pi);
+  }
+
   function renderPersonCanvas(pi) {
     const p = persons[pi];
     if (!p.img) return;
@@ -3321,6 +3506,15 @@ const mp = (() => {
       cropSrc = cOut;
     }
 
+    // Apply brightness enhancement if set
+    if (p.state.brightness && p.state.brightness !== 0) {
+      const bC = document.createElement('canvas');
+      bC.width = cropSrc.width; bC.height = cropSrc.height;
+      const bCtx = bC.getContext('2d');
+      bCtx.drawImage(cropSrc, 0, 0);
+      mpApplyBrightness(bCtx, bC.width, bC.height, p.state.brightness);
+      cropSrc = bC;
+    }
     p.resultCanvas = cropSrc;
 
     // Draw display canvas
@@ -3428,8 +3622,7 @@ const mp = (() => {
     if (!cv) return;
     const marginMM = parseFloat(document.getElementById('mpMargin')?.value) || 8;
     const gapMM    = parseFloat(document.getElementById('mpGap')?.value) || 2;
-    const pW = orient === 'portrait' ? 210 : 297;
-    const pH = orient === 'portrait' ? 297 : 210;
+    const {pW, pH} = getMpPageDims();
     const PX = 2.2;
     const cW = Math.round(pW * PX), cH = Math.round(pH * PX);
     cv.width = cW; cv.height = cH;
@@ -3473,9 +3666,13 @@ const mp = (() => {
     }
   }
 
-  /* Fill the A4 like a normal passport-photo sheet. Each person's photos
-     continue in the very next free slot, then wrap to the next row. */
+  /* Fill the sheet like a normal passport-photo layout.
+     Supports row-by-row and column-by-column directions. */
   function computeContinuousPlacements(activePeople, areaW, areaH, gapMM) {
+    if (mpImgDir === 'col') {
+      return computeContinuousPlacementsCol(activePeople, areaW, areaH, gapMM);
+    }
+    // Row-by-row (default)
     const placements = [];
     let x = 0, y = 0, rowH = 0;
     outer: for (const person of activePeople) {
@@ -3492,6 +3689,28 @@ const mp = (() => {
         placements.push({ person, x, y, w, h });
         x += w + gapMM;
         rowH = Math.max(rowH, h);
+      }
+    }
+    return placements;
+  }
+
+  function computeContinuousPlacementsCol(activePeople, areaW, areaH, gapMM) {
+    const placements = [];
+    let x = 0, y = 0, colW = 0;
+    outer: for (const person of activePeople) {
+      const w = person.state.sizeWmm || 35;
+      const h = person.state.sizeHmm || 45;
+      const count = person.state.photoCount || 4;
+      for (let i = 0; i < count; i++) {
+        if (y > 0 && y + h > areaH + 0.01) {
+          y = 0;
+          x += colW + gapMM;
+          colW = 0;
+        }
+        if (x + w > areaW + 0.01) break outer;
+        placements.push({ person, x, y, w, h });
+        y += h + gapMM;
+        colW = Math.max(colW, w);
       }
     }
     return placements;
@@ -3525,9 +3744,9 @@ const mp = (() => {
     const {jsPDF} = window.jspdf;
     const marginMM = parseFloat(document.getElementById('mpMargin')?.value) || 8;
     const gapMM    = parseFloat(document.getElementById('mpGap')?.value) || 2;
-    const pW = orient === 'portrait' ? 210 : 297;
-    const pH = orient === 'portrait' ? 297 : 210;
-    const pdf = new jsPDF({orientation:orient, unit:'mm', format:'a4', compress:true});
+    const {pW, pH} = getMpPageDims();
+    const paperFmt = mpPaperSize==='a4' ? 'a4' : [Math.min(pW,pH), Math.max(pW,pH)];
+    const pdf = new jsPDF({orientation:orient, unit:'mm', format:paperFmt, compress:true});
 
     const areaW = pW - marginMM * 2;
     const areaH = pH - marginMM * 2;
@@ -3559,7 +3778,8 @@ const mp = (() => {
 
   return {setPersonCount, setOrient, loadFile, onDrop, rotate, flip, applyCrop, clearCrop,
           setSize, setSizeRaw, deltaCount, clearPerson, setBgMode, removeBg, fillBg, restoreBg,
-          refreshPreview, downloadPDF};
+          refreshPreview, downloadPDF,
+          setMpPaperSize, setMpCustomDim, setMpImgDir, setMpCorner, mpSetBrightness};
 })();
 
 /* ============================================================
