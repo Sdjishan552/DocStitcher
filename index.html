@@ -299,10 +299,41 @@
             </div>
             <p style="font-size:12.5px;color:var(--text-muted);margin-bottom:16px">Place this image on an A4 page for printing — like a photocopy shop. Set size, count, and orientation, then download as PDF.</p>
 
+            <!-- Paper Size Selector -->
+            <div class="ctrl-row" style="margin-bottom:14px;gap:16px;flex-wrap:wrap;align-items:flex-end">
+              <div class="ctrl-group">
+                <label class="ctrl-label">🖨 Paper Size</label>
+                <div style="display:flex;gap:6px;flex-wrap:wrap">
+                  <button class="a4-orient-btn active" id="a4Paper_a4" onclick="sdt.setA4PaperSize('a4')">A4 (210×297mm)</button>
+                  <button class="a4-orient-btn" id="a4Paper_4x6" onclick="sdt.setA4PaperSize('4x6')">4×6 in (10.16×15.24cm)</button>
+                  <button class="a4-orient-btn" id="a4Paper_custom" onclick="sdt.setA4PaperSize('custom')">Custom</button>
+                </div>
+              </div>
+            </div>
+            <div id="a4CustomSizeRow" style="display:none;margin-bottom:14px;gap:10px;align-items:center;flex-wrap:wrap">
+              <label class="ctrl-label" style="margin:0">Custom Width (mm):</label>
+              <input type="number" id="a4CustomPW" value="210" min="50" max="600" step="1" style="width:72px;padding:6px 8px;border:1.5px solid var(--border);border-radius:8px;font-size:13px" oninput="sdt.setA4CustomDim()">
+              <label class="ctrl-label" style="margin:0">×  Height (mm):</label>
+              <input type="number" id="a4CustomPH" value="297" min="50" max="600" step="1" style="width:72px;padding:6px 8px;border:1.5px solid var(--border);border-radius:8px;font-size:13px" oninput="sdt.setA4CustomDim()">
+            </div>
+
+            <!-- Brightness Enhancement Slider (Photo Making) -->
+            <div class="mt-section-label">☀️ Photo Enhancement — Brightness &amp; Clarity</div>
+            <div class="ctrl-row" style="margin-bottom:16px">
+              <div class="ctrl-group" style="flex:1">
+                <label class="ctrl-label">Enhancement Level: <span id="mtBrightnessLabel">0</span></label>
+                <div class="slider-wrap">
+                  <input type="range" id="mtBrightness" min="-100" max="100" value="0" step="1"
+                    oninput="sdt.mtSetBrightness(this.value)" style="--pct:50%">
+                </div>
+                <div style="font-size:11px;color:var(--text-muted);margin-top:4px">← Darken &nbsp;&nbsp; 0 = Original &nbsp;&nbsp; Brighten / Enhance →</div>
+              </div>
+            </div>
+
             <!-- ROW 1: Page orientation + Image count -->
             <div class="ctrl-row" style="margin-bottom:14px;gap:20px;flex-wrap:wrap">
               <div class="ctrl-group">
-                <label class="ctrl-label">📄 A4 Page Orientation</label>
+                <label class="ctrl-label">📄 Page Orientation</label>
                 <div style="display:flex;gap:8px">
                   <button class="a4-orient-btn active" id="a4OrientPortrait" onclick="sdt.setA4Orient('portrait')">
                     <svg width="12" height="16" viewBox="0 0 12 16" fill="none"><rect x="0.5" y="0.5" width="11" height="15" rx="1.5" stroke="currentColor" stroke-width="1.2"/></svg>
@@ -432,6 +463,62 @@
             <div class="ctrl-group">
               <label class="ctrl-label">📐 Margin (mm)</label>
               <input type="number" id="mpMargin" value="8" step="0.5" min="3" max="25" style="width:64px;padding:6px 8px;border:1.5px solid var(--border);border-radius:8px;font-size:13px" oninput="mp.refreshPreview()">
+            </div>
+          </div>
+
+          <!-- Paper Size -->
+          <div class="ctrl-row" style="margin-bottom:14px;gap:16px;flex-wrap:wrap;align-items:flex-end">
+            <div class="ctrl-group">
+              <label class="ctrl-label">🖨 Paper Size</label>
+              <div style="display:flex;gap:6px;flex-wrap:wrap">
+                <button class="a4-orient-btn active" id="mpPaper_a4" onclick="mp.setMpPaperSize('a4')">A4 (210×297mm)</button>
+                <button class="a4-orient-btn" id="mpPaper_4x6" onclick="mp.setMpPaperSize('4x6')">4×6 in (10.16×15.24cm)</button>
+                <button class="a4-orient-btn" id="mpPaper_custom" onclick="mp.setMpPaperSize('custom')">Custom</button>
+              </div>
+            </div>
+          </div>
+          <div id="mpCustomSizeRow" style="display:none;margin-bottom:14px;gap:10px;align-items:center;flex-wrap:wrap">
+            <label class="ctrl-label" style="margin:0">Custom Width (mm):</label>
+            <input type="number" id="mpCustomPW" value="210" min="50" max="600" step="1" style="width:72px;padding:6px 8px;border:1.5px solid var(--border);border-radius:8px;font-size:13px" oninput="mp.setMpCustomDim()">
+            <label class="ctrl-label" style="margin:0">×  Height (mm):</label>
+            <input type="number" id="mpCustomPH" value="297" min="50" max="600" step="1" style="width:72px;padding:6px 8px;border:1.5px solid var(--border);border-radius:8px;font-size:13px" oninput="mp.setMpCustomDim()">
+          </div>
+
+          <!-- Fill direction + Corner anchor -->
+          <div class="ctrl-row" style="margin-bottom:18px;gap:20px;flex-wrap:wrap;align-items:flex-start">
+            <div class="ctrl-group">
+              <label class="ctrl-label">📌 Start Placing From</label>
+              <div class="a4-corner-grid">
+                <button class="a4-corner-btn active" id="mpCorner_tl" onclick="mp.setMpCorner('tl')" title="Top-Left">↖ Top-Left</button>
+                <button class="a4-corner-btn"        id="mpCorner_tr" onclick="mp.setMpCorner('tr')" title="Top-Right">↗ Top-Right</button>
+                <button class="a4-corner-btn"        id="mpCorner_bl" onclick="mp.setMpCorner('bl')" title="Bottom-Left">↙ Bot-Left</button>
+                <button class="a4-corner-btn"        id="mpCorner_br" onclick="mp.setMpCorner('br')" title="Bottom-Right">↘ Bot-Right</button>
+              </div>
+            </div>
+            <div class="ctrl-group">
+              <label class="ctrl-label">🔀 Fill Photos</label>
+              <div style="display:flex;gap:8px;flex-direction:column">
+                <button class="a4-dir-btn active" id="mpDirRow" onclick="mp.setMpImgDir('row')">
+                  <svg width="32" height="18" viewBox="0 0 32 18" fill="none">
+                    <rect x="1" y="1" width="8" height="7" rx="1" fill="currentColor" opacity="0.8"/>
+                    <rect x="12" y="1" width="8" height="7" rx="1" fill="currentColor" opacity="0.5"/>
+                    <rect x="23" y="1" width="8" height="7" rx="1" fill="currentColor" opacity="0.3"/>
+                    <rect x="1" y="10" width="8" height="7" rx="1" fill="currentColor" opacity="0.2"/>
+                    <path d="M4 4 L28 4" stroke="currentColor" stroke-width="0.8" stroke-dasharray="3 2" opacity="0.4"/>
+                  </svg>
+                  Row by Row (→ then ↓)
+                </button>
+                <button class="a4-dir-btn" id="mpDirCol" onclick="mp.setMpImgDir('col')">
+                  <svg width="32" height="18" viewBox="0 0 32 18" fill="none">
+                    <rect x="1" y="1" width="8" height="7" rx="1" fill="currentColor" opacity="0.8"/>
+                    <rect x="1" y="10" width="8" height="7" rx="1" fill="currentColor" opacity="0.5"/>
+                    <rect x="12" y="1" width="8" height="7" rx="1" fill="currentColor" opacity="0.3"/>
+                    <rect x="12" y="10" width="8" height="7" rx="1" fill="currentColor" opacity="0.2"/>
+                    <path d="M5 2 L5 16" stroke="currentColor" stroke-width="0.8" stroke-dasharray="3 2" opacity="0.4"/>
+                  </svg>
+                  Column by Column (↓ then →)
+                </button>
+              </div>
             </div>
           </div>
 
