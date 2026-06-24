@@ -863,7 +863,8 @@ function loadPdfAsImage(file, docId, slot) {
         canvas.height = viewport.height;
         const ctx = canvas.getContext('2d');
         await page.render({ canvasContext: ctx, viewport }).promise;
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+        // Use PNG for lossless intermediate to avoid quality loss when re-encoding
+        const dataUrl = canvas.toDataURL('image/png');
         const img = new Image();
         img.onload = () => {
           doc.files[slot] = { file, dataUrl, img, sourceType: 'pdf' };
@@ -1161,7 +1162,8 @@ async function downloadDocument(docId) {
       off.height = isPort ? BASE : Math.round(BASE*210/297);
       drawPreviewCanvas(doc, off);
       const mime = fmt==='png' ? 'image/png' : 'image/jpeg';
-      const dataUrl = off.toDataURL(mime, 0.95);
+      const quality = fmt==='png' ? 1.0 : Math.max(0.1, Math.min(1, doc.quality / 100));
+      const dataUrl = off.toDataURL(mime, quality);
       const a=document.createElement('a');
       a.href=dataUrl; a.download=cleanFilename(doc.name)+'.'+(fmt==='png'?'png':'jpg');
       document.body.appendChild(a); a.click(); a.remove();
@@ -1195,7 +1197,8 @@ async function downloadAllDocuments() {
         off.height=isPort?BASE:Math.round(BASE*210/297);
         drawPreviewCanvas(doc,off);
         const mime=fmt==='png'?'image/png':'image/jpeg';
-        const dataUrl=off.toDataURL(mime,0.95);
+        const quality=fmt==='png'?1.0:Math.max(0.1,Math.min(1,doc.quality/100));
+        const dataUrl=off.toDataURL(mime,quality);
         const a=document.createElement('a');
         a.href=dataUrl; a.download=cleanFilename(doc.name)+'.'+(fmt==='png'?'png':'jpg');
         document.body.appendChild(a);a.click();a.remove();
@@ -1468,6 +1471,7 @@ window.sdt = (() => {
     format: 'jpeg',
     maxW: 0,
     hasCrop: false,
+    brightness: 0,
   };
   let mtCropDragging=false, mtCropStartX=0, mtCropStartY=0;
   let mtDisplayScale=1, mtCropDisplayRect=null;
@@ -1491,23 +1495,7 @@ window.sdt = (() => {
 
   function buildMtEditedSourceCanvas(image = mtOrigImg, state = mtState) {
     if (!image) return null;
-    const deg = ((state.rotateDeg % 360) + 360) % 360;
-    const swap = deg === 90 || deg === 270;
-    const srcW = image.naturalWidth || image.width;
-    const srcH = image.naturalHeight || image.height;
-    const rW = swap ? srcH : srcW;
-    const rH = swap ? srcW : srcH;
-
-    const rotC = document.createElement('canvas');
-    rotC.width = Math.max(1, rW);
-    rotC.height = Math.max(1, rH);
-    const rotCtx = rotC.getContext('2d');
-    rotCtx.save();
-    rotCtx.translate(rotC.width / 2, rotC.height / 2);
-    rotCtx.rotate(deg * Math.PI / 180);
-    rotCtx.scale(state.flipH ? -1 : 1, state.flipV ? -1 : 1);
-    rotCtx.drawImage(image, -srcW / 2, -srcH / 2);
-    rotCtx.restore();
+    const rotC = makeTransformedCanvas(image, state);
 
     if (!state.hasCrop || !state.cropRect) return rotC;
 
@@ -1645,9 +1633,47 @@ window.sdt = (() => {
     if (mtOrigImg) renderMultiTool();
   }
 
+  function makeTransformedCanvas(image, state) {
+    const deg = Number(state.rotateDeg || 0);
+    const rad = deg * Math.PI / 180;
+    const srcW = image.naturalWidth || image.width;
+    const srcH = image.naturalHeight || image.height;
+    const cos = Math.abs(Math.cos(rad));
+    const sin = Math.abs(Math.sin(rad));
+    const outW = Math.max(1, Math.ceil(srcW * cos + srcH * sin));
+    const outH = Math.max(1, Math.ceil(srcW * sin + srcH * cos));
+    const canvas = document.createElement('canvas');
+    canvas.width = outW;
+    canvas.height = outH;
+    const ctx = canvas.getContext('2d');
+    ctx.save();
+    ctx.translate(outW / 2, outH / 2);
+    ctx.rotate(rad);
+    ctx.scale(state.flipH ? -1 : 1, state.flipV ? -1 : 1);
+    ctx.drawImage(image, -srcW / 2, -srcH / 2);
+    ctx.restore();
+    return canvas;
+  }
+
+  function clampCanvasPos(pos, canvas) {
+    return {
+      x: Math.max(0, Math.min(canvas.width, pos.x)),
+      y: Math.max(0, Math.min(canvas.height, pos.y)),
+    };
+  }
+
+  function clampCropRect(rect, canvas) {
+    const x = Math.max(0, Math.min(rect.x, canvas.width));
+    const y = Math.max(0, Math.min(rect.y, canvas.height));
+    const w = Math.max(0, Math.min(rect.w, canvas.width - x));
+    const h = Math.max(0, Math.min(rect.h, canvas.height - y));
+    return {x, y, w, h};
+  }
+
   function initMultiTool(img, file) {
     mtOrigFile=file; mtOrigImg=img;
     mtState={rotateDeg:0,flipH:false,flipV:false,cropRect:null,quality:85,format:'jpeg',maxW:0,hasCrop:false,brightness:0};
+    mtSyncRotationControl();
     const bSlider=document.getElementById('mtBrightness');
     if(bSlider){bSlider.value=0;upSlider(bSlider);
       const bLbl=document.getElementById('mtBrightnessLabel');
@@ -1662,17 +1688,8 @@ window.sdt = (() => {
 
   function renderMultiTool() {
     // Apply rotate then crop to get current working image
-    const deg=((mtState.rotateDeg%360)+360)%360;
-    const swap=deg===90||deg===270;
-    const srcW=mtOrigImg.naturalWidth, srcH=mtOrigImg.naturalHeight;
-    const rW=swap?srcH:srcW, rH=swap?srcW:srcH;
-
-    // Step 1: Rotate
-    const rotC=document.createElement('canvas'); rotC.width=rW; rotC.height=rH;
-    const rotCtx=rotC.getContext('2d');
-    rotCtx.save(); rotCtx.translate(rW/2,rH/2); rotCtx.rotate(deg*Math.PI/180);
-    rotCtx.scale(mtState.flipH?-1:1, mtState.flipV?-1:1);
-    rotCtx.drawImage(mtOrigImg,-srcW/2,-srcH/2); rotCtx.restore();
+    // Step 1: Rotate / flip. The output canvas grows for small tilt angles so nothing is clipped.
+    const rotC=makeTransformedCanvas(mtOrigImg, mtState);
 
     // Step 2: Crop
     let cropSrc=rotC;
@@ -1713,7 +1730,7 @@ window.sdt = (() => {
 
   function drawMtCropCanvas(rotated) {
     const wrap=document.getElementById('mtCropWrap');
-    const maxW=Math.max(wrap.offsetWidth||680, 480);
+    const maxW=Math.max((wrap.clientWidth||680) - 8, 320);
     // Always fill the wrap width so image appears big
     mtDisplayScale=maxW/rotated.width;
     // Cap to avoid absurdly huge display but allow up to 2x
@@ -1722,7 +1739,7 @@ window.sdt = (() => {
     const dH=Math.round(rotated.height*mtDisplayScale);
     const cv=document.getElementById('mtCropCanvas');
     cv.width=dW; cv.height=dH;
-    cv.style.width=dW+'px'; cv.style.height=dH+'px';
+    cv.style.width=dW+'px'; cv.style.height=dH+'px'; cv.style.maxWidth='none';
     const ctx=cv.getContext('2d');
     ctx.drawImage(rotated,0,0,dW,dH);
 
@@ -1766,14 +1783,7 @@ window.sdt = (() => {
     if (!cv2) return;
     const ctx = cv2.getContext('2d');
     if (mtOrigImg) {
-      const deg=((mtState.rotateDeg%360)+360)%360, swap=deg===90||deg===270;
-      const srcW=mtOrigImg.naturalWidth, srcH=mtOrigImg.naturalHeight;
-      const rW=swap?srcH:srcW, rH=swap?srcW:srcH;
-      const rotC=document.createElement('canvas'); rotC.width=rW; rotC.height=rH;
-      const rCtx=rotC.getContext('2d');
-      rCtx.save(); rCtx.translate(rW/2,rH/2); rCtx.rotate(deg*Math.PI/180);
-      rCtx.scale(mtState.flipH?-1:1, mtState.flipV?-1:1);
-      rCtx.drawImage(mtOrigImg,-srcW/2,-srcH/2); rCtx.restore();
+      const rotC=makeTransformedCanvas(mtOrigImg, mtState);
       ctx.drawImage(rotC, 0, 0, cv2.width, cv2.height);
     }
     if (mtCropDisplayRect) {
@@ -1806,7 +1816,7 @@ window.sdt = (() => {
     // Remove old listeners by replacing with fresh ones via onX
     cv.onmousedown = e => {
       e.preventDefault();
-      const pos = getCropCanvasPos(e.clientX, e.clientY);
+      const pos = clampCanvasPos(getCropCanvasPos(e.clientX, e.clientY), cv);
       mtCropDragging=true;
       mtCropStartX=pos.x; mtCropStartY=pos.y;
       mtCropDisplayRect=null;
@@ -1815,10 +1825,10 @@ window.sdt = (() => {
 
     cv.onmousemove = e => {
       if(!mtCropDragging) return;
-      const pos = getCropCanvasPos(e.clientX, e.clientY);
+      const pos = clampCanvasPos(getCropCanvasPos(e.clientX, e.clientY), cv);
       const x=Math.min(mtCropStartX, pos.x), y=Math.min(mtCropStartY, pos.y);
       const w=Math.abs(pos.x - mtCropStartX),   h=Math.abs(pos.y - mtCropStartY);
-      mtCropDisplayRect={x,y,w,h};
+      mtCropDisplayRect=clampCropRect({x,y,w,h}, cv);
       redrawCropOverlay();
     };
 
@@ -1846,7 +1856,7 @@ window.sdt = (() => {
     cv.ontouchstart = e => {
       e.preventDefault();
       const t=e.touches[0];
-      const pos=getCropCanvasPos(t.clientX, t.clientY);
+      const pos=clampCanvasPos(getCropCanvasPos(t.clientX, t.clientY), cv);
       mtCropDragging=true; mtCropStartX=pos.x; mtCropStartY=pos.y;
       mtCropDisplayRect=null; redrawCropOverlay();
     };
@@ -1854,10 +1864,10 @@ window.sdt = (() => {
       e.preventDefault();
       if(!mtCropDragging) return;
       const t=e.touches[0];
-      const pos=getCropCanvasPos(t.clientX, t.clientY);
+      const pos=clampCanvasPos(getCropCanvasPos(t.clientX, t.clientY), cv);
       const x=Math.min(mtCropStartX,pos.x), y=Math.min(mtCropStartY,pos.y);
       const w=Math.abs(pos.x-mtCropStartX),  h=Math.abs(pos.y-mtCropStartY);
-      mtCropDisplayRect={x,y,w,h};
+      mtCropDisplayRect=clampCropRect({x,y,w,h}, cv);
       redrawCropOverlay();
     };
     cv.ontouchend = e => {
@@ -1876,7 +1886,15 @@ window.sdt = (() => {
     };
   }
 
-  function mtRotate(deg){mtState.rotateDeg+=deg;mtCropDisplayRect=null;mtState.cropRect=null;mtState.hasCrop=false;renderMultiTool();setTimeout(bindMtCropEvents,50);}
+  function mtSyncRotationControl(){
+    const input=document.getElementById('mtRotateFine');
+    const label=document.getElementById('mtRotateFineLabel');
+    const val=Math.round((Number(mtState.rotateDeg)||0)*10)/10;
+    if(input) input.value=val;
+    if(label) label.textContent=val+' deg';
+  }
+  function mtRotate(deg){mtState.rotateDeg=(Number(mtState.rotateDeg)||0)+Number(deg||0);mtCropDisplayRect=null;mtState.cropRect=null;mtState.hasCrop=false;mtSyncRotationControl();renderMultiTool();setTimeout(bindMtCropEvents,50);}
+  function mtSetRotation(deg){mtState.rotateDeg=Number(deg)||0;mtCropDisplayRect=null;mtState.cropRect=null;mtState.hasCrop=false;mtSyncRotationControl();renderMultiTool();setTimeout(bindMtCropEvents,50);}
   function mtFlip(dir){if(dir==='h')mtState.flipH=!mtState.flipH;else mtState.flipV=!mtState.flipV;renderMultiTool();setTimeout(bindMtCropEvents,50);}
   function mtApplyCrop(){renderMultiTool();toast(Lang.t('toastCropApplied'));document.getElementById('mtApplyCropBtn').classList.add('active-state');}
   function mtClearCrop(){mtState.cropRect=null;mtState.hasCrop=false;mtCropDisplayRect=null;renderMultiTool();setTimeout(bindMtCropEvents,50);document.getElementById('mtApplyCropBtn').classList.remove('active-state');}
@@ -1888,10 +1906,11 @@ window.sdt = (() => {
     const cr=document.getElementById('mtBgColorRow');if(cr)cr.style.display='none';
     const rb=document.getElementById('mtRestoreBgBtn');if(rb)rb.style.display='none';
     const st=document.getElementById('mtBgStatus');if(st)st.textContent='';
-    mtState={rotateDeg:0,flipH:false,flipV:false,cropRect:null,quality:85,format:'jpeg',maxW:0,hasCrop:false};mtCropDisplayRect=null;
+    mtState={rotateDeg:0,flipH:false,flipV:false,cropRect:null,quality:85,format:'jpeg',maxW:0,hasCrop:false,brightness:0};mtCropDisplayRect=null;
     document.getElementById('mtQual').value=85;document.getElementById('mtQualLabel').textContent='85%';
     document.getElementById('mtMaxW').value=0;document.getElementById('mtMaxWLabel').textContent='Original';
     document.getElementById('mtFmt').value='jpeg';
+    mtSyncRotationControl();
     mtClearSize();
     renderMultiTool();setTimeout(bindMtCropEvents,50);
     toast(Lang.t('toastReset'));
@@ -1956,8 +1975,8 @@ window.sdt = (() => {
     'custom': null, // user-defined
   };
 
-  let a4State={orient:'portrait', count:4, margin:8, corner:'tl', imgDir:'row', gap:2,
-               paperSize:'a4', customPW:210, customPH:297};
+  let a4State={orient:'landscape', count:4, margin:3, corner:'tl', imgDir:'row', gap:2,
+               paperSize:'4x6', customPW:210, customPH:297};
 
   function getA4PageDims(){
     const s = a4State.paperSize;
@@ -2135,7 +2154,7 @@ window.sdt = (() => {
 
   function a4Preview(){
     if(!mtResultCanvas||!mtResultCanvas.width) return;
-    const marginMM = parseFloat(document.getElementById('a4Margin')?.value)||8;
+    const marginMM = parseFloat(document.getElementById('a4Margin')?.value)||3;
     const gapRaw   = parseFloat(document.getElementById('a4Gap')?.value);
     const gapMM    = isNaN(gapRaw) ? 2 : Math.max(0, gapRaw);
     a4State.margin = marginMM;
@@ -2204,7 +2223,7 @@ window.sdt = (() => {
     if(!mtResultCanvas||!mtResultCanvas.width){toast('Upload and edit an image first.','error');return;}
     if(!window.jspdf||!window.jspdf.jsPDF){toast('PDF library not loaded.','error');return;}
     const {jsPDF}=window.jspdf;
-    const marginMM = parseFloat(document.getElementById('a4Margin')?.value)||8;
+    const marginMM = parseFloat(document.getElementById('a4Margin')?.value)||3;
     const gapRaw   = parseFloat(document.getElementById('a4Gap')?.value);
     const gapMM    = isNaN(gapRaw)?2:Math.max(0,gapRaw);
     const {pW, pH} = getA4PageDims();
@@ -2465,50 +2484,56 @@ window.sdt = (() => {
   }
 
   // ---- PDF Download ----
+  function bpPageFit(dim, marginMM) {
+    const portrait = {orient:'portrait', pW:210, pH:297};
+    const landscape = {orient:'landscape', pW:297, pH:210};
+    const score = page => {
+      const innerW = page.pW - marginMM * 2;
+      const innerH = page.pH - marginMM * 2;
+      const scale = Math.min(innerW / dim.w, innerH / dim.h);
+      return {page, scale, area: dim.w * scale * dim.h * scale};
+    };
+    const p = score(portrait);
+    const l = score(landscape);
+    const best = l.area > p.area ? l : p;
+    const innerW = best.page.pW - marginMM * 2;
+    const innerH = best.page.pH - marginMM * 2;
+    const iW = dim.w * best.scale;
+    const iH = dim.h * best.scale;
+    return {
+      orient: best.page.orient,
+      x: marginMM + (innerW - iW) / 2,
+      y: marginMM + (innerH - iH) / 2,
+      iW,
+      iH,
+    };
+  }
+
   async function bpDownloadPDF(){
     if(!bpPages.length){ toast('No pages to export','error'); return; }
     if(!window.jspdf||!window.jspdf.jsPDF){ toast('PDF library not loaded','error'); return; }
     const {jsPDF}=window.jspdf;
+    const pageMarginMM = 5;
 
     document.getElementById('bpProgress').style.display='block';
     document.getElementById('bpProgressLabel').textContent='Building PDF…';
     const bar=document.getElementById('bpProgressBar');
 
-    // Determine page size from first image
     const firstImg=await bpImgDimensions(bpPages[0].dataUrl);
-    const isLandscape=firstImg.w>firstImg.h;
-
-    // We'll auto-detect per-page orientation
-    const pdf=new jsPDF({orientation:isLandscape?'landscape':'portrait',unit:'mm',format:'a4',compress:true});
-    const A4W_P=210, A4H_P=297;
+    const firstFit=bpPageFit(firstImg, pageMarginMM);
+    const pdf=new jsPDF({orientation:firstFit.orient,unit:'mm',format:'a4',compress:true});
 
     for(let i=0;i<bpPages.length;i++){
       const pg=bpPages[i];
       bar.style.width=((i/bpPages.length)*100)+'%';
       document.getElementById('bpProgressLabel').textContent=`Adding page ${i+1} of ${bpPages.length}…`;
-      if(i>0) pdf.addPage('a4', 'portrait'); // reset; override below
 
       const dim=await bpImgDimensions(pg.dataUrl);
-      const land=dim.w>dim.h;
-      // Set page orientation per page
-      const pgW=land?A4H_P:A4W_P, pgH=land?A4W_P:A4H_P;
-      if(i>0){
-        pdf.deletePage(pdf.internal.getNumberOfPages());
-        pdf.addPage([pgW,pgH]);
-      } else {
-        // First page: re-init if needed
-        pdf.internal.pageSize.width=pgW;
-        pdf.internal.pageSize.height=pgH;
-      }
-
-      // Scale image to fill page preserving aspect ratio
-      const ar=dim.w/dim.h;
-      let iW=pgW, iH=pgW/ar;
-      if(iH>pgH){ iH=pgH; iW=pgH*ar; }
-      const x=(pgW-iW)/2, y=(pgH-iH)/2;
+      const fit=bpPageFit(dim, pageMarginMM);
+      if(i>0) pdf.addPage('a4', fit.orient);
 
       const fmt=pg.dataUrl.startsWith('data:image/png')?'PNG':'JPEG';
-      pdf.addImage(pg.dataUrl,fmt,x,y,iW,iH,undefined,'FAST');
+      pdf.addImage(pg.dataUrl,fmt,fit.x,fit.y,fit.iW,fit.iH,undefined,'FAST');
 
       // Yield to keep UI responsive
       await new Promise(r=>setTimeout(r,0));
@@ -2936,7 +2961,7 @@ window.sdt = (() => {
 
   return {
     toast,fmtBytes,switchTab,dzDrag,dzLeave,dzDrop,
-    loadMultiToolFile,mtRotate,mtFlip,mtApplyCrop,mtClearCrop,
+    loadMultiToolFile,mtRotate,mtSetRotation,mtFlip,mtApplyCrop,mtClearCrop,
     mtSetQuality,mtSetFormat,mtSetMaxW,mtReset,mtDownload,mtSendToApp,clearMultiTool,
     loadWmImg,updateWmSizeLabel,updateWmOpLabel,updateWmRotLabel,updateWmPreview,downloadWatermarked,clearWatermark,
     bindMtCropEvents,
@@ -3058,9 +3083,9 @@ const PersonBackground = (() => {
    All placed together on one A4 sheet.
 ============================================================ */
 const mp = (() => {
-  let personCount = 4;
-  let orient = 'portrait';
-  let mpPaperSize = 'a4';   // 'a4' | '4x6' | 'custom'
+  let personCount = 1;
+  let orient = 'landscape';
+  let mpPaperSize = '4x6';   // 'a4' | '4x6' | 'custom'
   let mpCustomPW = 210, mpCustomPH = 297;
   let mpImgDir = 'row';   // 'row' | 'col'
   let mpCorner = 'tl';    // 'tl' | 'tr' | 'bl' | 'br'
@@ -3085,6 +3110,38 @@ const mp = (() => {
       if(el) el.classList.toggle('active',k===sz);
     });
     refreshPreview();
+  }
+
+  function makePersonTransformedCanvas(image, state) {
+    const deg = Number(state.rotateDeg || 0);
+    const rad = deg * Math.PI / 180;
+    const srcW = image.naturalWidth || image.width;
+    const srcH = image.naturalHeight || image.height;
+    const cos = Math.abs(Math.cos(rad));
+    const sin = Math.abs(Math.sin(rad));
+    const outW = Math.max(1, Math.ceil(srcW * cos + srcH * sin));
+    const outH = Math.max(1, Math.ceil(srcW * sin + srcH * cos));
+    const canvas = document.createElement('canvas');
+    canvas.width = outW;
+    canvas.height = outH;
+    const ctx = canvas.getContext('2d');
+    ctx.save();
+    ctx.translate(outW / 2, outH / 2);
+    ctx.rotate(rad);
+    ctx.scale(state.flipH ? -1 : 1, state.flipV ? -1 : 1);
+    ctx.drawImage(image, -srcW / 2, -srcH / 2);
+    ctx.restore();
+    return canvas;
+  }
+
+  function syncRotationControl(pi) {
+    const p = persons[pi];
+    if (!p) return;
+    const val = Math.round((Number(p.state.rotateDeg)||0) * 10) / 10;
+    const input = document.getElementById('mpRotFine' + pi);
+    const label = document.getElementById('mpRotFineLabel' + pi);
+    if (input) input.value = val;
+    if (label) label.textContent = val + ' deg';
   }
 
   function setMpCustomDim(){
@@ -3122,12 +3179,12 @@ const mp = (() => {
       dragging: false, startX: 0, startY: 0,
       count: 4 // photos of this person on A4
     }));
-    setPersonCount(4);
+    setPersonCount(1);
   }
 
   function freshState() {
     return {rotateDeg:0, flipH:false, flipV:false, cropRect:null, quality:85,
-            hasCrop:false, sizeWmm:35, sizeHmm:45, photoCount:4, brightness:0};
+            hasCrop:false, sizeWmm:25, sizeHmm:30, photoCount:4, brightness:0};
   }
 
   function setPersonCount(n) {
@@ -3165,21 +3222,21 @@ const mp = (() => {
           👤 Person ${pi+1}
         </div>
         ${p.img ? `
-          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;justify-content:center">
             <button class="btn-secondary" style="font-size:11px;padding:5px 10px" onclick="mp.rotate(${pi},-90)">↺ 90°L</button>
             <button class="btn-secondary" style="font-size:11px;padding:5px 10px" onclick="mp.rotate(${pi},90)">↻ 90°R</button>
-            <button class="btn-ghost"     style="font-size:11px;padding:5px 10px" onclick="mp.flip(${pi},'h')">⇆H</button>
-            <button class="btn-ghost"     style="font-size:11px;padding:5px 10px" onclick="mp.flip(${pi},'v')">⇅V</button>
+            <input type="number" id="mpRotFine${pi}" value="${Math.round((p.state.rotateDeg||0)*10)/10}" step="0.5" min="-45" max="45" style="width:62px;padding:5px 7px;border:1.5px solid var(--border);border-radius:7px;font-size:11px" oninput="mp.setRotation(${pi},this.value)">
+            <span id="mpRotFineLabel${pi}" style="font-size:11px;color:var(--text-muted);min-width:40px">${Math.round((p.state.rotateDeg||0)*10)/10} deg</span>
             <button class="btn-ghost"     style="font-size:11px;padding:5px 10px;color:var(--danger)" onclick="mp.clearPerson(${pi})">✕ Clear</button>
           </div>
-          <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">Drag on image to crop</div>
-          <canvas id="mpCropCanvas${pi}" style="max-width:100%;border-radius:8px;cursor:crosshair;display:block;border:1.5px solid var(--border)"></canvas>
-          <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;text-align:center">Step 1: Drag on image to crop</div>
+          <canvas id="mpCropCanvas${pi}" style="display:block;margin:0 auto;max-width:100%;border-radius:8px;cursor:crosshair;border:1.5px solid var(--border)"></canvas>
+          <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;justify-content:center">
             <button class="btn-secondary" style="font-size:11px;padding:5px 10px" onclick="mp.applyCrop(${pi})">✂ Apply Crop</button>
             <button class="btn-ghost"     style="font-size:11px;padding:5px 10px" onclick="mp.clearCrop(${pi})">Clear Crop</button>
           </div>
           <div class="mp-bg-tools">
-            <div class="mp-bg-heading"><span>✂️ Automatic background</span><span class="passport-optional-badge">Optional</span></div>
+            <div class="mp-bg-heading"><span>Step 2: ✂️ Remove Background (Optional)</span><span class="passport-optional-badge">Optional</span></div>
             <div class="mp-bg-method">
               <label class="ctrl-label" for="mpBgMode${pi}">Removal Method</label>
               <select class="ctrl-select" id="mpBgMode${pi}" ${p.bgBusy?'disabled':''} onchange="mp.setBgMode(${pi},this.value)">
@@ -3202,13 +3259,13 @@ const mp = (() => {
             </div>` : ''}
           </div>
           <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <span style="font-size:11.5px;color:var(--text-muted)">Size:</span>
-            <button class="btn-secondary size-preset-btn" onclick="mp.setSize(${pi},35,45,'mm')">3.5×4.5cm</button>
+            <span style="font-size:11.5px;color:var(--text-muted);font-weight:700">Step 3 — Size:</span>
+            <button class="btn-secondary size-preset-btn" onclick="mp.setSize(${pi},2.5,3,'cm')">2.5×3cm</button>
             <button class="btn-secondary size-preset-btn" onclick="mp.setSize(${pi},50.8,50.8,'mm')">2×2in</button>
-            <input type="number" id="mpW${pi}" value="${p.state.sizeWmm}" step="0.5" min="10" max="100" style="width:54px;padding:4px 6px;border:1.5px solid var(--border);border-radius:7px;font-size:12px" oninput="mp.setSizeRaw(${pi})">
+            <input type="number" id="mpW${pi}" value="${(p.state.sizeWmm/10).toFixed(1)}" step="0.1" min="0.5" max="10" style="width:54px;padding:4px 6px;border:1.5px solid var(--border);border-radius:7px;font-size:12px" oninput="mp.setSizeRaw(${pi})">
             <span style="font-size:11px">×</span>
-            <input type="number" id="mpH${pi}" value="${p.state.sizeHmm}" step="0.5" min="10" max="120" style="width:54px;padding:4px 6px;border:1.5px solid var(--border);border-radius:7px;font-size:12px" oninput="mp.setSizeRaw(${pi})">
-            <span style="font-size:11px;color:var(--text-muted)">mm</span>
+            <input type="number" id="mpH${pi}" value="${(p.state.sizeHmm/10).toFixed(1)}" step="0.1" min="0.5" max="12" style="width:54px;padding:4px 6px;border:1.5px solid var(--border);border-radius:7px;font-size:12px" oninput="mp.setSizeRaw(${pi})">
+            <span style="font-size:11px;color:var(--text-muted)">cm</span>
           </div>
           <div style="margin-top:8px;display:flex;gap:6px;align-items:center">
             <span style="font-size:11.5px;color:var(--text-muted)">Photos on A4:</span>
@@ -3339,8 +3396,8 @@ const mp = (() => {
     p.bgStatus = p.bgMode === 'api' ? 'Uploading this photo to remove.bg...' : 'Loading the AI person detector…';
     renderPersonCards();
     try {
-      const source = p.originalImg || p.img;
-      const sourceCanvas = imageToCanvas(source);
+      // Use the cropped/rotated result canvas so BG removal applies to the edited image
+      const sourceCanvas = p.resultCanvas || imageToCanvas(p.img);
       let cutout;
       if (p.bgMode === 'api') {
         try {
@@ -3353,14 +3410,21 @@ const mp = (() => {
       } else {
         cutout = await PersonBackground.remove(sourceCanvas, message => setBgStatus(pi, message));
       }
-      if (!p.originalImg) p.originalImg = source;
+      // Backup original image + state for restore
+      if (!p.originalImg) {
+        p.originalImg = p.img;
+        p._preRemoveBgState = { cropRect: p.state.cropRect ? {...p.state.cropRect} : null, hasCrop: p.state.hasCrop,
+          rotateDeg: p.state.rotateDeg, flipH: p.state.flipH, flipV: p.state.flipV };
+      }
       p.bgCutout = cutout;
       p.bgColor = 'transparent';
-      p.img = await canvasToImage(PersonBackground.fill(cutout, p.bgColor));
-      p.bgStatus = 'Background removed. Choose transparent or a solid colour.';
+      // Load cutout as the new base image, clear crop/rotate so result canvas is correct
+      const cutoutImg = await canvasToImage(PersonBackground.fill(cutout, p.bgColor));
+      p.img = cutoutImg;
+      p.state.cropRect = null; p.state.hasCrop = false;
+      p.state.rotateDeg = 0; p.state.flipH = false; p.state.flipV = false;
       p.cropDisplayRect = null;
-      p.state.cropRect = null;
-      p.state.hasCrop = false;
+      p.bgStatus = 'Background removed from cropped image. Choose transparent or a solid colour.';
       toast(`Person ${pi + 1}: background removed.`);
     } catch (error) {
       p.bgStatus = 'Error: ' + error.message;
@@ -3403,6 +3467,17 @@ const mp = (() => {
     persons[pi].cropDisplayRect = null;
     persons[pi].state.cropRect = null;
     persons[pi].state.hasCrop = false;
+    syncRotationControl(pi);
+    renderPersonCanvas(pi);
+    setTimeout(() => bindCropEvents(pi), 30);
+  }
+
+  function setRotation(pi, deg) {
+    persons[pi].state.rotateDeg = Number(deg) || 0;
+    persons[pi].cropDisplayRect = null;
+    persons[pi].state.cropRect = null;
+    persons[pi].state.hasCrop = false;
+    syncRotationControl(pi);
     renderPersonCanvas(pi);
     setTimeout(() => bindCropEvents(pi), 30);
   }
@@ -3430,16 +3505,16 @@ const mp = (() => {
     persons[pi].state.sizeHmm = toMM(h, unit);
     const wEl = document.getElementById('mpW'+pi);
     const hEl = document.getElementById('mpH'+pi);
-    if (wEl) wEl.value = persons[pi].state.sizeWmm.toFixed(1);
-    if (hEl) hEl.value = persons[pi].state.sizeHmm.toFixed(1);
+    if (wEl) wEl.value = (persons[pi].state.sizeWmm / 10).toFixed(1);
+    if (hEl) hEl.value = (persons[pi].state.sizeHmm / 10).toFixed(1);
     refreshPreview();
   }
 
   function setSizeRaw(pi) {
     const w = parseFloat(document.getElementById('mpW'+pi)?.value);
     const h = parseFloat(document.getElementById('mpH'+pi)?.value);
-    if (!isNaN(w) && w > 0) persons[pi].state.sizeWmm = w;
-    if (!isNaN(h) && h > 0) persons[pi].state.sizeHmm = h;
+    if (!isNaN(w) && w > 0) persons[pi].state.sizeWmm = w * 10;
+    if (!isNaN(h) && h > 0) persons[pi].state.sizeHmm = h * 10;
     refreshPreview();
   }
 
@@ -3483,18 +3558,7 @@ const mp = (() => {
   function renderPersonCanvas(pi) {
     const p = persons[pi];
     if (!p.img) return;
-    const deg = ((p.state.rotateDeg % 360) + 360) % 360;
-    const swap = deg === 90 || deg === 270;
-    const srcW = p.img.naturalWidth, srcH = p.img.naturalHeight;
-    const rW = swap ? srcH : srcW, rH = swap ? srcW : srcH;
-
-    // Rotate
-    const rotC = document.createElement('canvas');
-    rotC.width = rW; rotC.height = rH;
-    const rCtx = rotC.getContext('2d');
-    rCtx.save(); rCtx.translate(rW/2, rH/2); rCtx.rotate(deg * Math.PI / 180);
-    rCtx.scale(p.state.flipH ? -1 : 1, p.state.flipV ? -1 : 1);
-    rCtx.drawImage(p.img, -srcW/2, -srcH/2); rCtx.restore();
+    const rotC = makePersonTransformedCanvas(p.img, p.state);
 
     // Crop
     let cropSrc = rotC;
@@ -3554,7 +3618,9 @@ const mp = (() => {
     function getPos(clientX, clientY) {
       const rect = cv.getBoundingClientRect();
       const scaleX = cv.width / rect.width, scaleY = cv.height / rect.height;
-      return {x:(clientX-rect.left)*scaleX, y:(clientY-rect.top)*scaleY};
+      const x = (clientX-rect.left)*scaleX;
+      const y = (clientY-rect.top)*scaleY;
+      return {x:Math.max(0,Math.min(cv.width,x)), y:Math.max(0,Math.min(cv.height,y))};
     }
 
     cv.onmousedown = e => {
@@ -3620,7 +3686,7 @@ const mp = (() => {
   function refreshPreview() {
     const cv = document.getElementById('mpA4Canvas');
     if (!cv) return;
-    const marginMM = parseFloat(document.getElementById('mpMargin')?.value) || 8;
+    const marginMM = parseFloat(document.getElementById('mpMargin')?.value) || 3;
     const gapMM    = parseFloat(document.getElementById('mpGap')?.value) || 2;
     const {pW, pH} = getMpPageDims();
     const PX = 2.2;
@@ -3660,7 +3726,7 @@ const mp = (() => {
       const labels = activePeople.map((p) => {
         const si = persons.indexOf(p);
         const placed = placedByPerson.get(p) || 0;
-        return `P${si+1}: ${placed} photo${placed!==1?'s':''} @ ${(p.state.sizeWmm||35).toFixed(0)}×${(p.state.sizeHmm||45).toFixed(0)}mm`;
+        return `P${si+1}: ${placed} photo${placed!==1?'s':''} @ ${((p.state.sizeWmm||25)/10).toFixed(1)}×${((p.state.sizeHmm||30)/10).toFixed(1)}cm`;
       });
       if (infoEl) infoEl.textContent = labels.join(' · ');
     }
@@ -3676,8 +3742,8 @@ const mp = (() => {
     const placements = [];
     let x = 0, y = 0, rowH = 0;
     outer: for (const person of activePeople) {
-      const w = person.state.sizeWmm || 35;
-      const h = person.state.sizeHmm || 45;
+      const w = person.state.sizeWmm || 25;
+      const h = person.state.sizeHmm || 30;
       const count = person.state.photoCount || 4;
       for (let i = 0; i < count; i++) {
         if (x > 0 && x + w > areaW + 0.01) {
@@ -3698,8 +3764,8 @@ const mp = (() => {
     const placements = [];
     let x = 0, y = 0, colW = 0;
     outer: for (const person of activePeople) {
-      const w = person.state.sizeWmm || 35;
-      const h = person.state.sizeHmm || 45;
+      const w = person.state.sizeWmm || 25;
+      const h = person.state.sizeHmm || 30;
       const count = person.state.photoCount || 4;
       for (let i = 0; i < count; i++) {
         if (y > 0 && y + h > areaH + 0.01) {
@@ -3742,7 +3808,7 @@ const mp = (() => {
     if (!activePeople.some(p => p.resultCanvas)) { toast('Upload at least one person\'s photo.', 'error'); return; }
 
     const {jsPDF} = window.jspdf;
-    const marginMM = parseFloat(document.getElementById('mpMargin')?.value) || 8;
+    const marginMM = parseFloat(document.getElementById('mpMargin')?.value) || 3;
     const gapMM    = parseFloat(document.getElementById('mpGap')?.value) || 2;
     const {pW, pH} = getMpPageDims();
     const paperFmt = mpPaperSize==='a4' ? 'a4' : [Math.min(pW,pH), Math.max(pW,pH)];
@@ -3776,7 +3842,7 @@ const mp = (() => {
 
   document.addEventListener('DOMContentLoaded', init);
 
-  return {setPersonCount, setOrient, loadFile, onDrop, rotate, flip, applyCrop, clearCrop,
+  return {setPersonCount, setOrient, loadFile, onDrop, rotate, setRotation, flip, applyCrop, clearCrop,
           setSize, setSizeRaw, deltaCount, clearPerson, setBgMode, removeBg, fillBg, restoreBg,
           refreshPreview, downloadPDF,
           setMpPaperSize, setMpCustomDim, setMpImgDir, setMpCorner, mpSetBrightness};
