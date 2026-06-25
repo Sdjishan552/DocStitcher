@@ -3282,8 +3282,8 @@ const PersonBackground = (() => {
 ============================================================ */
 const mp = (() => {
   let personCount = 1;
-  let orient = 'landscape';
-  let mpPaperSize = '4x6';   // 'a4' | '4x6' | 'custom'
+  let orient = 'portrait';   // matches HTML default (Portrait button has 'active' class)
+  let mpPaperSize = 'a4';    // matches HTML default (A4 button has 'active' class)
   let mpCustomPW = 210, mpCustomPH = 297;
   let mpImgDir = 'row';   // 'row' | 'col'
   let mpCorner = 'tl';    // 'tl' | 'tr' | 'bl' | 'br'
@@ -3307,6 +3307,24 @@ const mp = (() => {
       const el=document.getElementById('mpPaper_'+k);
       if(el) el.classList.toggle('active',k===sz);
     });
+    // Auto-adjust default photo size to be sensible for the selected paper
+    if(sz==='4x6'){
+      // 4×6in = 101.6×152.4mm. A typical 4×6 print holds 2×3 passport photos at ~35×45mm each
+      persons.slice(0,personCount).forEach((p,pi)=>{
+        p.state.sizeWmm = 35; p.state.sizeHmm = 45;
+        const wEl=document.getElementById('mpW'+pi), hEl=document.getElementById('mpH'+pi);
+        if(wEl) wEl.value=(35/10).toFixed(1);
+        if(hEl) hEl.value=(45/10).toFixed(1);
+      });
+    } else if(sz==='a4'){
+      // A4 default: standard 25×30mm passport photo
+      persons.slice(0,personCount).forEach((p,pi)=>{
+        p.state.sizeWmm = 25; p.state.sizeHmm = 30;
+        const wEl=document.getElementById('mpW'+pi), hEl=document.getElementById('mpH'+pi);
+        if(wEl) wEl.value=(25/10).toFixed(1);
+        if(hEl) hEl.value=(30/10).toFixed(1);
+      });
+    }
     refreshPreview();
   }
 
@@ -3375,8 +3393,11 @@ const mp = (() => {
       state: freshState(),
       cropDisplayRect: null, displayScale: 1,
       dragging: false, startX: 0, startY: 0,
-      count: 4 // photos of this person on A4
+      count: 4
     }));
+    // Sync button active states with JS defaults (portrait + a4)
+    setOrient(orient);
+    setMpPaperSize(mpPaperSize);
     setPersonCount(1);
   }
 
@@ -4021,7 +4042,9 @@ const mp = (() => {
     const marginMM = parseFloat(document.getElementById('mpMargin')?.value) || 3;
     const gapMM    = parseFloat(document.getElementById('mpGap')?.value) || 2;
     const {pW, pH} = getMpPageDims();
-    const paperFmt = mpPaperSize==='a4' ? 'a4' : [Math.min(pW,pH), Math.max(pW,pH)];
+    // For custom paper sizes, pass [pW, pH] directly — jsPDF uses them as [width, height]
+    // For A4, use the named format string so jsPDF handles it correctly
+    const paperFmt = mpPaperSize==='a4' ? 'a4' : [pW, pH];
     const pdf = new jsPDF({orientation:orient, unit:'mm', format:paperFmt, compress:true});
 
     const areaW = pW - marginMM * 2;
@@ -4096,7 +4119,7 @@ const mp = (() => {
     const gapMM    = 4;
     const {pW, pH} = getMpPageDims();
 
-    const paperFmt = mpPaperSize === 'a4' ? 'a4' : [Math.min(pW,pH), Math.max(pW,pH)];
+    const paperFmt = mpPaperSize === 'a4' ? 'a4' : [pW, pH];
     const pdf = new jsPDF({orientation: orient, unit: 'mm', format: paperFmt, compress: true});
 
     // Gather all canvases in order
