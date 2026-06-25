@@ -1,6 +1,6 @@
 /* ============================================================
    Document Stitcher - Pure Vanilla JS  v7.7
-   Features:  
+   Features: 
    1. Multi-tool image editor (crop+rotate+flip+compress+convert at once)
    2. PDF input support with auto-detect + output options (pdf/jpg/png)
    3. Signature keyboard joystick placement (arrow keys)
@@ -2509,6 +2509,202 @@ window.sdt = (() => {
     };
   }
 
+  // ---- PDF COMPRESSOR ----
+  let pcOrigFile = null;
+  let pcPages = [];   // [{dataUrl, w, h}]
+  let pcOrigSize = 0;
+
+  function pcDzDrop(e) {
+    e.preventDefault();
+    document.getElementById('pcDrop').classList.remove('dz-over');
+    const f = e.dataTransfer.files[0];
+    if (f) pcLoadFile(f);
+  }
+
+  async function pcLoadFile(file) {
+    if (!file || !(file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf'))) {
+      toast('Please upload a PDF file.', 'error'); return;
+    }
+    pcOrigFile = file;
+    pcOrigSize = file.size;
+    pcPages = [];
+
+    document.getElementById('pcPlaceholder').style.display = 'none';
+    document.getElementById('pcFileInfo').style.display = 'block';
+    document.getElementById('pcFileName').textContent = file.name;
+    document.getElementById('pcFileSize').textContent = fmtBytes(file.size) + ' · loading…';
+    document.getElementById('pcEditor').style.display = 'none';
+    document.getElementById('pcProgress').style.display = 'block';
+    document.getElementById('pcProgressLabel').textContent = 'Loading PDF pages…';
+    document.getElementById('pcProgressBar').style.width = '0%';
+
+    try {
+      if (!window.pdfjsLib) {
+        await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js');
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      }
+      const arrayBuf = await file.arrayBuffer();
+      const pdf = await window.pdfjsLib.getDocument({data: arrayBuf}).promise;
+      const total = pdf.numPages;
+
+      for (let p = 1; p <= total; p++) {
+        document.getElementById('pcProgressLabel').textContent = `Reading page ${p} of ${total}…`;
+        document.getElementById('pcProgressBar').style.width = ((p / total) * 70) + '%';
+        const page = await pdf.getPage(p);
+        const vp = page.getViewport({scale: 2.0});
+        const cv = document.createElement('canvas');
+        cv.width = vp.width; cv.height = vp.height;
+        await page.render({canvasContext: cv.getContext('2d'), viewport: vp}).promise;
+        pcPages.push({dataUrl: cv.toDataURL('image/jpeg', 0.92), w: cv.width, h: cv.height});
+        await new Promise(r => setTimeout(r, 0));
+      }
+
+      document.getElementById('pcProgressBar').style.width = '100%';
+      document.getElementById('pcProgressLabel').textContent = 'Done loading!';
+      document.getElementById('pcFileSize').textContent = fmtBytes(file.size) + ' · ' + total + ' page' + (total !== 1 ? 's' : '');
+      document.getElementById('pcOrigSize').textContent = fmtBytes(file.size);
+      document.getElementById('pcPageCount').textContent = total;
+      pcUpdateEstimate();
+      setTimeout(() => {
+        document.getElementById('pcProgress').style.display = 'none';
+        document.getElementById('pcEditor').style.display = 'block';
+      }, 400);
+    } catch(e) {
+      toast('Failed to load PDF: ' + e.message, 'error');
+      document.getElementById('pcProgress').style.display = 'none';
+      document.getElementById('pcPlaceholder').style.display = 'flex';
+      document.getElementById('pcFileInfo').style.display = 'none';
+    }
+  }
+
+  function pcUpdateQualLabel(el) {
+    updateSliderGradient(el);
+    document.getElementById('pcQualLabel').textContent = el.value + '%';
+    pcUpdateEstimate();
+  }
+
+  function pcTargetChanged(el) {
+    el.classList.remove('ts-error', 'ts-ok');
+    if (!el.value) return;
+    const v = parseInt(el.value);
+    el.classList.add(isNaN(v) || v < 20 ? 'ts-error' : 'ts-ok');
+  }
+
+  async function pcApplyTarget() {
+    if (!pcPages.length) { toast('Load a PDF first.', 'error'); return; }
+    const inp = document.getElementById('pcTargetKb');
+    const targetKb = parseInt(inp.value);
+    if (isNaN(targetKb) || targetKb < 20) { inp.classList.add('ts-error'); toast('Enter a valid target size (min 20 KB).', 'error'); return; }
+    const targetBytes = targetKb * 1024;
+
+    // Binary search quality
+    let lo = 5, hi = 100, bestQ = 60;
+    for (let i = 0; i < 8; i++) {
+      const mid = Math.round((lo + hi) / 2);
+      const est = pcEstimateSize(mid);
+      if (est <= targetBytes) { bestQ = mid; lo = mid + 1; } else { hi = mid - 1; }
+      if (lo > hi) break;
+    }
+    const slider = document.getElementById('pcQual');
+    slider.value = bestQ; updateSliderGradient(slider);
+    document.getElementById('pcQualLabel').textContent = bestQ + '%';
+    pcUpdateEstimate();
+    inp.classList.remove('ts-error'); inp.classList.add('ts-ok');
+    toast('Quality set to ' + bestQ + '% to target ~' + targetKb + ' KB');
+  }
+
+  function pcEstimateSize(quality) {
+    // Rough estimate: each JPEG page at given quality scales approximately linearly
+    // We use the ratio from 92% quality (which we used when rasterising)
+    // Since all pages are stored at ~92% quality, we scale the original file size
+    // by the quality ratio squared (perceptual approximation)
+    const ratio = (quality / 92) * (quality / 92);
+    return Math.round(pcOrigSize * ratio);
+  }
+
+  function pcUpdateEstimate() {
+    const q = parseInt(document.getElementById('pcQual').value);
+    const est = pcEstimateSize(q);
+    document.getElementById('pcEstSize').textContent = fmtBytes(est);
+  }
+
+  async function pcDownload() {
+    if (!pcPages.length) { toast('Load a PDF first.', 'error'); return; }
+    if (!window.jspdf || !window.jspdf.jsPDF) { toast('PDF library not loaded.', 'error'); return; }
+
+    const qual = parseInt(document.getElementById('pcQual').value) / 100;
+    const {jsPDF} = window.jspdf;
+
+    document.getElementById('pcProgress').style.display = 'block';
+    document.getElementById('pcProgressLabel').textContent = 'Building compressed PDF…';
+    const bar = document.getElementById('pcProgressBar');
+    bar.style.width = '0%';
+
+    const first = await pcImgDims(pcPages[0].dataUrl);
+    const firstFit = bpPageFit(first, 5);
+    const pdf = new jsPDF({orientation: firstFit.orient, unit: 'mm', format: 'a4', compress: true});
+
+    for (let i = 0; i < pcPages.length; i++) {
+      bar.style.width = ((i / pcPages.length) * 90) + '%';
+      document.getElementById('pcProgressLabel').textContent = `Compressing page ${i + 1} of ${pcPages.length}…`;
+
+      const pg = pcPages[i];
+      // Re-encode at the chosen quality
+      const reEncoded = await pcReEncode(pg.dataUrl, qual);
+      const dim = await pcImgDims(reEncoded);
+      const fit = bpPageFit(dim, 5);
+      if (i > 0) pdf.addPage('a4', fit.orient);
+      pdf.addImage(reEncoded, 'JPEG', fit.x, fit.y, fit.iW, fit.iH, undefined, 'FAST');
+      await new Promise(r => setTimeout(r, 0));
+    }
+
+    bar.style.width = '100%';
+    document.getElementById('pcProgressLabel').textContent = 'Saving…';
+    const outName = (pcOrigFile.name.replace(/\.pdf$/i, '') || 'compressed') + '_compressed.pdf';
+    saveBlob(pdf.output('blob'), outName);
+    setTimeout(() => {
+      document.getElementById('pcProgress').style.display = 'none';
+      bar.style.width = '0%';
+    }, 800);
+    toast('Compressed PDF saved!');
+  }
+
+  function pcReEncode(dataUrl, quality) {
+    return new Promise(resolve => {
+      const img = new Image();
+      img.onload = () => {
+        const cv = document.createElement('canvas');
+        cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+        const ctx = cv.getContext('2d', {alpha: false});
+        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
+        ctx.drawImage(img, 0, 0);
+        resolve(cv.toDataURL('image/jpeg', quality));
+      };
+      img.src = dataUrl;
+    });
+  }
+
+  function pcImgDims(dataUrl) {
+    return new Promise(res => {
+      const img = new Image();
+      img.onload = () => res({w: img.naturalWidth, h: img.naturalHeight});
+      img.src = dataUrl;
+    });
+  }
+
+  function pcClear() {
+    pcOrigFile = null; pcPages = []; pcOrigSize = 0;
+    document.getElementById('pcPlaceholder').style.display = 'flex';
+    document.getElementById('pcFileInfo').style.display = 'none';
+    document.getElementById('pcEditor').style.display = 'none';
+    document.getElementById('pcProgress').style.display = 'none';
+    document.getElementById('pcInput').value = '';
+    document.getElementById('pcTargetKb').value = '';
+    document.getElementById('pcTargetKb').classList.remove('ts-ok', 'ts-error');
+  }
+
+  // ---- END PDF COMPRESSOR ----
+
   async function bpDownloadPDF(){
     if(!bpPages.length){ toast('No pages to export','error'); return; }
     if(!window.jspdf||!window.jspdf.jsPDF){ toast('PDF library not loaded','error'); return; }
@@ -2974,6 +3170,8 @@ window.sdt = (() => {
     bpAddFiles,bpDzDrop,bpDelete,bpMove,bpSortByName,bpReverseOrder,bpClearAll,
     bpLbOpen,bpLbNav,bpLbMove,bpLbDelete,bpLbClose,
     bpDownloadPDF,
+    // PDF Compressor
+    pcLoadFile,pcDzDrop,pcUpdateQualLabel,pcTargetChanged,pcApplyTarget,pcDownload,pcClear,
     loadCompressImg:(f)=>loadMultiToolFile(f),
     loadCropImg:(f)=>loadMultiToolFile(f),
     loadRotateImg:(f)=>loadMultiToolFile(f),
@@ -3285,6 +3483,18 @@ const mp = (() => {
           </div>
           <div style="margin-top:8px">
             <img id="mpPreview${pi}" alt="Person ${pi+1} preview" style="max-width:100%;max-height:120px;border-radius:6px;border:1px solid var(--border);object-fit:contain">
+          </div>
+          <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+            <div style="font-size:11px;font-weight:700;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px">⬇ Download Edited Image</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <button class="btn-primary" style="font-size:11.5px;padding:6px 14px;background:linear-gradient(135deg,#6c63ff,#4a90d9)" onclick="mp.downloadSingleImage(${pi},'jpeg')">
+                JPG
+              </button>
+              <button class="btn-secondary" style="font-size:11.5px;padding:6px 14px" onclick="mp.downloadSingleImage(${pi},'png')">
+                PNG
+              </button>
+              <span style="font-size:10.5px;color:var(--text-muted);align-self:center">— saves 1 photo with all your edits</span>
+            </div>
           </div>
         ` : `
           <div class="drop-zone sdt-drop" style="min-height:140px" onclick="document.getElementById('mpFileInput${pi}').click()"
@@ -3840,11 +4050,129 @@ const mp = (() => {
     toast('Multi-person A4 PDF downloaded!');
   }
 
+  /* ---- Download single edited image for one person ---- */
+  function downloadSingleImage(pi, fmt) {
+    const p = persons[pi];
+    if (!p || !p.resultCanvas) { toast('Upload and edit a photo first.', 'error'); return; }
+    const cv = p.resultCanvas;
+
+    // Flatten onto white background (for JPEG), keep alpha for PNG
+    const out = document.createElement('canvas');
+    out.width = cv.width; out.height = cv.height;
+    const ctx = out.getContext('2d');
+    if (fmt === 'jpeg') {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, out.width, out.height);
+    }
+    ctx.drawImage(cv, 0, 0);
+
+    const mime = fmt === 'png' ? 'image/png' : 'image/jpeg';
+    const quality = fmt === 'png' ? 1.0 : 0.92;
+    const dataUrl = out.toDataURL(mime, quality);
+    const ext = fmt === 'png' ? 'png' : 'jpg';
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = `photo_person${pi + 1}.${ext}`;
+    document.body.appendChild(a); a.click(); a.remove();
+    toast(`Downloaded photo_person${pi + 1}.${ext}`);
+  }
+
+  /* ---- Fill-Page PDF ----
+     Rules:
+       1 image  → fills whole page
+       2 images → page split in 2 equal halves (top/bottom in portrait, left/right in landscape)
+       3 images → 2×2 grid, 3 cells filled, 1 empty
+       4 images → 2×2 grid, all 4 filled
+       5-6      → 2×3 or 3×2 grid, etc.
+     No borders/lines drawn. Margins + gaps kept, everything else fills.
+  ---- */
+  async function downloadFillPagePDF() {
+    if (!window.jspdf || !window.jspdf.jsPDF) { toast('PDF library not loaded.', 'error'); return; }
+    const activePeople = persons.slice(0, personCount).filter(p => p.resultCanvas);
+    if (!activePeople.length) { toast('Upload at least one person\'s photo.', 'error'); return; }
+
+    const {jsPDF} = window.jspdf;
+    const marginMM = 6;
+    const gapMM    = 4;
+    const {pW, pH} = getMpPageDims();
+
+    const paperFmt = mpPaperSize === 'a4' ? 'a4' : [Math.min(pW,pH), Math.max(pW,pH)];
+    const pdf = new jsPDF({orientation: orient, unit: 'mm', format: paperFmt, compress: true});
+
+    // Gather all canvases in order
+    const allCanvases = [];
+    for (const person of activePeople) {
+      const count = person.state.photoCount || 1;
+      for (let i = 0; i < count; i++) {
+        allCanvases.push(person.resultCanvas);
+      }
+    }
+    const n = allCanvases.length;
+
+    // Determine grid dimensions based on count
+    // Always use the smallest grid that fits n images as equal-sized cells
+    let gridCols, gridRows;
+    if (n === 1) {
+      gridCols = 1; gridRows = 1;
+    } else if (n === 2) {
+      // Portrait: stack vertically (1 col, 2 rows). Landscape: side by side (2 cols, 1 row)
+      if (orient === 'portrait') { gridCols = 1; gridRows = 2; }
+      else                       { gridCols = 2; gridRows = 1; }
+    } else if (n === 3 || n === 4) {
+      gridCols = 2; gridRows = 2;   // 2×2 grid; 3 imgs leave 1 cell empty
+    } else if (n === 5 || n === 6) {
+      if (orient === 'portrait') { gridCols = 2; gridRows = 3; }
+      else                       { gridCols = 3; gridRows = 2; }
+    } else if (n <= 9) {
+      gridCols = 3; gridRows = 3;
+    } else {
+      // General: square-ish
+      gridCols = Math.ceil(Math.sqrt(n));
+      gridRows = Math.ceil(n / gridCols);
+    }
+
+    const areaW = pW - marginMM * 2;
+    const areaH = pH - marginMM * 2;
+    const cellW = (areaW - (gridCols - 1) * gapMM) / gridCols;
+    const cellH = (areaH - (gridRows - 1) * gapMM) / gridRows;
+
+    // Pre-flatten canvases to JPEG data URLs
+    const imageCache = new Map();
+    const getJpeg = (cv) => {
+      if (!imageCache.has(cv)) {
+        const flat = document.createElement('canvas');
+        flat.width = cv.width; flat.height = cv.height;
+        const flatCtx = flat.getContext('2d');
+        flatCtx.fillStyle = '#ffffff';
+        flatCtx.fillRect(0, 0, flat.width, flat.height);
+        flatCtx.drawImage(cv, 0, 0);
+        imageCache.set(cv, flat.toDataURL('image/jpeg', 0.92));
+      }
+      return imageCache.get(cv);
+    };
+
+    // Place each image — fill (stretch to cover) its cell entirely
+    for (let i = 0; i < n; i++) {
+      const col = i % gridCols;
+      const row = Math.floor(i / gridCols);
+      const xMM = marginMM + col * (cellW + gapMM);
+      const yMM = marginMM + row * (cellH + gapMM);
+      pdf.addImage(getJpeg(allCanvases[i]), 'JPEG', xMM, yMM, cellW, cellH, undefined, 'FAST');
+    }
+
+    const outBlob = pdf.output('blob');
+    const outUrl = URL.createObjectURL(outBlob);
+    const a = document.createElement('a'); a.href = outUrl; a.download = 'fill_page_photos.pdf';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(outUrl), 5000);
+    toast(`Fill-page PDF downloaded! ${gridCols}×${gridRows} grid, ${n} photo${n!==1?'s':''}`);
+  }
+
   document.addEventListener('DOMContentLoaded', init);
 
   return {setPersonCount, setOrient, loadFile, onDrop, rotate, setRotation, flip, applyCrop, clearCrop,
           setSize, setSizeRaw, deltaCount, clearPerson, setBgMode, removeBg, fillBg, restoreBg,
-          refreshPreview, downloadPDF,
+          refreshPreview, downloadPDF, downloadFillPagePDF, downloadSingleImage,
           setMpPaperSize, setMpCustomDim, setMpImgDir, setMpCorner, mpSetBrightness};
 })();
 
