@@ -1,6 +1,6 @@
 /* ============================================================
    Document Stitcher - Pure Vanilla JS  v7.7
-   Features:  
+   Features: 
    1. Multi-tool image editor (crop+rotate+flip+compress+convert at once)
    2. PDF input support with auto-detect + output options (pdf/jpg/png)
    3. Signature keyboard joystick placement (arrow keys)
@@ -2525,7 +2525,6 @@ window.sdt = (() => {
 
   // ---- PDF COMPRESSOR ----
   let pcOrigFile = null;
-  let pcPages = [];   // [{dataUrl, w, h}]
   let pcOrigSize = 0;
 
   function pcDzDrop(e) {
@@ -2541,8 +2540,11 @@ window.sdt = (() => {
     }
     pcOrigFile = file;
     pcOrigSize = file.size;
-    pcPages = [];
-    _pcEstCache = {}; _pcEstBaseline = null;
+    _pcPdfDoc = null;
+    _pcCompressedCache = null;
+    _pcBuildPromise = null;
+    _pcEstimateToken += 1;
+    if (_pcEstimateTimer) clearTimeout(_pcEstimateTimer);
     _pcRawBytes = null; // store original bytes for stream-level compression
 
     document.getElementById('pcPlaceholder').style.display = 'none';
@@ -2565,24 +2567,20 @@ window.sdt = (() => {
       }
       const pdfDoc = await window.pdfjsLib.getDocument({data: arrayBuf.slice(0)}).promise;
       const total = pdfDoc.numPages;
+      _pcPdfDoc = pdfDoc;
 
       document.getElementById('pcProgressBar').style.width = '60%';
-      document.getElementById('pcProgressLabel').textContent = 'Analysing streams\u2026';
-
-      // Analyse image streams to estimate compression potential
-      await new Promise(r => setTimeout(r, 30));
-      const analysis = pcAnalyseStreams(_pcRawBytes);
+      document.getElementById('pcProgressLabel').textContent = 'Preparing compressor\u2026';
 
       document.getElementById('pcProgressBar').style.width = '100%';
       document.getElementById('pcFileSize').textContent = fmtBytes(file.size) + ' \u00b7 ' + total + ' page' + (total !== 1 ? 's' : '');
       document.getElementById('pcOrigSize').textContent = fmtBytes(file.size);
       document.getElementById('pcPageCount').textContent = total;
-      _pcAnalysis = analysis;
-      pcUpdateEstimate();
 
       setTimeout(() => {
         document.getElementById('pcProgress').style.display = 'none';
         document.getElementById('pcEditor').style.display = 'block';
+        pcUpdateEstimate();
       }, 300);
     } catch(e) {
       toast('Failed to load PDF: ' + e.message, 'error');
@@ -2592,62 +2590,13 @@ window.sdt = (() => {
     }
   }
 
-  // Stored raw PDF bytes and stream analysis
+  // Stored PDF data and exact compressed-output cache.
   let _pcRawBytes = null;
-  let _pcAnalysis = null;
-  let _pcEstCache = {};
-  let _pcEstBaseline = null;
-
-  // Analyse PDF byte stream to find compressible regions and estimate savings.
-  // Returns {jpegBytes, uncompressedBytes, totalStreams}
-  function pcAnalyseStreams(bytes) {
-    let jpegBytes = 0, uncompressedBytes = 0, totalStreams = 0;
-    const str = String.fromCharCode.apply(null, bytes.length < 5000000
-      ? bytes
-      : bytes.subarray(0, 5000000)); // sample first 5MB for speed
-
-    // Find image XObjects marked as DCTDecode (JPEG)
-    const dctRx = /\/Filter\s*\/DCTDecode/g;
-    let m;
-    while ((m = dctRx.exec(str)) !== null) {
-      jpegBytes += 50000; // rough average JPEG image size
-      totalStreams++;
-    }
-    // Find uncompressed or FlateDecode streams
-    const flatRx = /\/Filter\s*\/FlateDecode/g;
-    while ((m = flatRx.exec(str)) !== null) {
-      uncompressedBytes += 10000;
-      totalStreams++;
-    }
-    // Unfiltered streams (no /Filter key before stream keyword)
-    const rawRx = /\bstream\r?\n/g;
-    const filterCount = (str.match(/\/Filter/g) || []).length;
-    const streamCount = (str.match(/\bstream\r?\n/g) || []).length;
-    uncompressedBytes += Math.max(0, streamCount - filterCount) * 8000;
-
-    return {jpegBytes, uncompressedBytes, totalStreams, streamCount};
-  }
-
-  function pcEstimateSize(quality) {
-    if (_pcEstCache[quality] !== undefined) return _pcEstCache[quality];
-    if (!_pcRawBytes) return 0;
-
-    const origSize = _pcRawBytes.length;
-    // quality 100 = no image recompression, only metadata strip (~2-5% saving)
-    // quality 1   = maximum JPEG recompression (~40-70% saving on image-heavy PDFs)
-    // For text-heavy PDFs the saving is much less since streams are already compressed
-
-    const a = _pcAnalysis || {jpegBytes: 0, uncompressedBytes: 0};
-    const imagePortionEst = a.jpegBytes + a.uncompressedBytes;
-    const nonImageEst = Math.max(origSize - imagePortionEst, origSize * 0.3);
-
-    // Image bytes scale with quality; non-image bytes are unaffected
-    const qualFrac = quality / 100;
-    const newImageEst = imagePortionEst * (0.15 + 0.85 * Math.pow(qualFrac, 1.6));
-    const est = Math.round(nonImageEst + newImageEst);
-    _pcEstCache[quality] = Math.min(est, origSize); // never estimate larger than original
-    return _pcEstCache[quality];
-  }
+  let _pcPdfDoc = null;
+  let _pcCompressedCache = null; // {quality, blob, bytes}
+  let _pcBuildPromise = null;
+  let _pcEstimateTimer = null;
+  let _pcEstimateToken = 0;
 
   function pcUpdateQualLabel(el) {
     updateSliderGradient(el);
@@ -2664,69 +2613,99 @@ window.sdt = (() => {
 
   function pcUpdateEstimate() {
     const q = parseInt(document.getElementById('pcQual').value);
-    const est = pcEstimateSize(q);
-    document.getElementById('pcEstSize').textContent = est ? fmtBytes(est) : '\u2014';
+    const estEl = document.getElementById('pcEstSize');
+    if (!_pcPdfDoc) { estEl.textContent = '\u2014'; return; }
+    if (_pcCompressedCache && _pcCompressedCache.quality === q) {
+      estEl.textContent = fmtBytes(_pcCompressedCache.bytes);
+      return;
+    }
+    _pcCompressedCache = null;
+    estEl.textContent = 'Calculating\u2026';
+    const token = ++_pcEstimateToken;
+    if (_pcEstimateTimer) clearTimeout(_pcEstimateTimer);
+    _pcEstimateTimer = setTimeout(async () => {
+      try {
+        const blob = await pcGetCompressedBlob(q, (pct) => {
+          if (token !== _pcEstimateToken) return;
+          estEl.textContent = 'Calculating ' + Math.max(1, Math.round(pct * 100)) + '%\u2026';
+        });
+        if (token !== _pcEstimateToken) return;
+        estEl.textContent = fmtBytes(blob.size);
+      } catch(e) {
+        if (token === _pcEstimateToken) estEl.textContent = 'Could not calculate';
+      }
+    }, 350);
   }
 
   async function pcApplyTarget() {
-    if (!_pcRawBytes) { toast('Load a PDF first.', 'error'); return; }
+    if (!_pcRawBytes || !_pcPdfDoc) { toast('Load a PDF first.', 'error'); return; }
     const inp = document.getElementById('pcTargetKb');
     const targetKb = parseInt(inp.value);
     if (isNaN(targetKb) || targetKb < 20) { inp.classList.add('ts-error'); toast('Enter a valid target size (min 20 KB).', 'error'); return; }
     const targetBytes = targetKb * 1024;
-    let lo = 5, hi = 95, bestQ = 60;
-    for (let i = 0; i < 10; i++) {
-      const mid = Math.round((lo + hi) / 2);
-      if (pcEstimateSize(mid) <= targetBytes) { bestQ = mid; lo = mid + 1; } else { hi = mid - 1; }
-      if (lo > hi) break;
+    const candidates = [100,95,90,85,80,75,70,65,60,55,50,45,40,35,30,25,20,15,10,5];
+    let best = null;
+    let smallest = null;
+    const token = ++_pcEstimateToken;
+    const progress = document.getElementById('pcProgress');
+    const label = document.getElementById('pcProgressLabel');
+    const bar = document.getElementById('pcProgressBar');
+    progress.style.display = 'block';
+    try {
+      for (let i = 0; i < candidates.length; i++) {
+        const q = candidates[i];
+        label.textContent = 'Finding target size\u2026 ' + q + '%';
+        bar.style.width = Math.round((i / candidates.length) * 100) + '%';
+        const blob = await pcGetCompressedBlob(q);
+        if (token !== _pcEstimateToken) return;
+        smallest = {q, blob};
+        if (blob.size <= targetBytes) { best = {q, blob}; break; }
+      }
+    } catch(e) {
+      progress.style.display = 'none';
+      toast('Could not test target size: ' + e.message, 'error');
+      return;
     }
-    bestQ = Math.max(5, Math.min(95, bestQ));
+    const result = best || smallest;
+    const bestQ = result ? result.q : 5;
     const slider = document.getElementById('pcQual');
     slider.value = bestQ; updateSliderGradient(slider);
     document.getElementById('pcQualLabel').textContent = bestQ + '%';
-    pcUpdateEstimate();
+    if (result) _pcCompressedCache = {quality: bestQ, blob: result.blob, bytes: result.blob.size};
+    document.getElementById('pcEstSize').textContent = result ? fmtBytes(result.blob.size) : 'Could not calculate';
     inp.classList.remove('ts-error'); inp.classList.add('ts-ok');
-    toast('Quality set to ' + bestQ + '% \u2192 est. ' + fmtBytes(pcEstimateSize(bestQ)));
+    bar.style.width = '100%';
+    setTimeout(() => { progress.style.display = 'none'; bar.style.width = '0%'; }, 500);
+    toast('Quality set to ' + bestQ + '% \u2192 ' + (best ? fmtBytes(result.blob.size) : 'smallest available: ' + (result ? fmtBytes(result.blob.size) : 'unknown')));
   }
 
   async function pcDownload() {
-    if (!_pcRawBytes) { toast('Load a PDF first.', 'error'); return; }
+    if (!_pcRawBytes || !_pcPdfDoc) { toast('Load a PDF first.', 'error'); return; }
 
-    const qual = parseInt(document.getElementById('pcQual').value) / 100;
+    const quality = parseInt(document.getElementById('pcQual').value);
     document.getElementById('pcProgress').style.display = 'block';
     document.getElementById('pcProgressLabel').textContent = 'Compressing\u2026';
     const bar = document.getElementById('pcProgressBar');
     bar.style.width = '10%';
-    await new Promise(r => setTimeout(r, 30));
 
     try {
-      // Load pako (zlib) for re-deflating streams
-      if (!window.pako) {
-        await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js');
-      }
-
-      bar.style.width = '30%';
-      document.getElementById('pcProgressLabel').textContent = 'Recompressing image streams\u2026';
-      await new Promise(r => setTimeout(r, 20));
-
-      // Work on a copy of the raw bytes
-      let result = await pcCompressPdfBytes(_pcRawBytes, qual, (pct) => {
-        bar.style.width = (30 + pct * 60) + '%';
+      const blob = await pcGetCompressedBlob(quality, (pct) => {
+        bar.style.width = (10 + pct * 85) + '%';
+        document.getElementById('pcProgressLabel').textContent = 'Building compressed PDF\u2026 ' + Math.round(pct * 100) + '%';
       });
 
       bar.style.width = '95%';
       document.getElementById('pcProgressLabel').textContent = 'Saving\u2026';
-      await new Promise(r => setTimeout(r, 20));
 
       const outName = (pcOrigFile.name.replace(/\.pdf$/i, '') || 'compressed') + '_compressed.pdf';
-      saveBlob(new Blob([result], {type: 'application/pdf'}), outName);
+      saveBlob(blob, outName);
 
-      const saved = _pcRawBytes.length - result.byteLength;
-      const savedPct = Math.round(saved / _pcRawBytes.length * 100);
-      document.getElementById('pcEstSize').textContent = fmtBytes(result.byteLength) + ' \u2713';
+      const saved = _pcRawBytes.length - blob.size;
+      const savedPct = Math.round(Math.abs(saved) / _pcRawBytes.length * 100);
+      document.getElementById('pcEstSize').textContent = fmtBytes(blob.size) + ' \u2713';
       bar.style.width = '100%';
       setTimeout(() => { document.getElementById('pcProgress').style.display = 'none'; bar.style.width = '0%'; }, 600);
-      toast('Saved! ' + fmtBytes(result.byteLength) + ' (reduced by ' + savedPct + '%)');
+      toast('Saved! ' + fmtBytes(blob.size) + (saved >= 0 ? ' (reduced by ' : ' (larger by ') + savedPct + '%)');
     } catch(e) {
       document.getElementById('pcProgress').style.display = 'none';
       toast('Compression failed: ' + e.message, 'error');
@@ -2842,10 +2821,68 @@ window.sdt = (() => {
     return arr;
   }
 
+  async function pcGetCompressedBlob(quality, onProgress) {
+    if (_pcCompressedCache && _pcCompressedCache.quality === quality) {
+      onProgress && onProgress(1);
+      return _pcCompressedCache.blob;
+    }
+    if (_pcBuildPromise && _pcBuildPromise.quality === quality) return _pcBuildPromise.promise;
+
+    const promise = pcBuildRasterPdf(quality, onProgress).then(blob => {
+      _pcCompressedCache = {quality, blob, bytes: blob.size};
+      return blob;
+    }).finally(() => {
+      if (_pcBuildPromise && _pcBuildPromise.quality === quality) _pcBuildPromise = null;
+    });
+    _pcBuildPromise = {quality, promise};
+    return promise;
+  }
+
+  async function pcBuildRasterPdf(quality, onProgress) {
+    if (!_pcPdfDoc || !window.jspdf || !window.jspdf.jsPDF) throw new Error('PDF library not loaded.');
+    const {jsPDF} = window.jspdf;
+    const q = Math.max(5, Math.min(100, quality));
+    const jpegQuality = Math.max(0.22, Math.min(0.95, 0.18 + q / 120));
+    const renderScale = Math.max(0.7, Math.min(2.4, 0.55 + q / 55));
+    let pdf = null;
+
+    for (let p = 1; p <= _pcPdfDoc.numPages; p++) {
+      const page = await _pcPdfDoc.getPage(p);
+      const vp = page.getViewport({scale: renderScale});
+      const baseVp = page.getViewport({scale: 1});
+      const cv = document.createElement('canvas');
+      cv.width = Math.max(1, Math.floor(vp.width));
+      cv.height = Math.max(1, Math.floor(vp.height));
+      const ctx = cv.getContext('2d', {alpha: false});
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, cv.width, cv.height);
+      await page.render({canvasContext: ctx, viewport: vp}).promise;
+
+      const pageWmm = baseVp.width * 25.4 / 72;
+      const pageHmm = baseVp.height * 25.4 / 72;
+      if (!pdf) {
+        pdf = new jsPDF({
+          orientation: pageWmm > pageHmm ? 'landscape' : 'portrait',
+          unit: 'mm',
+          format: [pageWmm, pageHmm],
+          compress: true
+        });
+      } else {
+        pdf.addPage([pageWmm, pageHmm], pageWmm > pageHmm ? 'landscape' : 'portrait');
+      }
+      pdf.addImage(cv.toDataURL('image/jpeg', jpegQuality), 'JPEG', 0, 0, pageWmm, pageHmm, undefined, 'FAST');
+      cv.width = cv.height = 1;
+      onProgress && onProgress(p / _pcPdfDoc.numPages);
+      await new Promise(r => setTimeout(r, 0));
+    }
+    return pdf.output('blob');
+  }
+
   function pcClear() {
-    pcOrigFile = null; pcPages = []; pcOrigSize = 0;
-    _pcRawBytes = null; _pcAnalysis = null;
-    _pcEstCache = {}; _pcEstBaseline = null;
+    pcOrigFile = null; pcOrigSize = 0;
+    _pcRawBytes = null; _pcPdfDoc = null; _pcCompressedCache = null; _pcBuildPromise = null;
+    _pcEstimateToken += 1;
+    if (_pcEstimateTimer) clearTimeout(_pcEstimateTimer);
     document.getElementById('pcPlaceholder').style.display = 'flex';
     document.getElementById('pcFileInfo').style.display = 'none';
     document.getElementById('pcEditor').style.display = 'none';
