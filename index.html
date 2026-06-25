@@ -354,6 +354,18 @@
           <!-- Per-person editors -->
           <div id="mpPersonsContainer" style="display:grid;gap:18px"></div>
 
+          <!-- Fill Page Layout -->
+          <div id="mpFillPageSection" style="margin-top:20px;padding:16px 20px;background:var(--surface-2);border-radius:14px;border:1.5px solid var(--border)">
+            <div style="font-size:13px;font-weight:700;margin-bottom:8px;color:var(--text)">🗂 Fill Page with Uploaded Photos</div>
+            <p style="font-size:11.5px;color:var(--text-muted);margin-bottom:12px">Fills the whole page using the count you entered per person above. Photos are placed in an equal grid with larger margins &amp; gaps, covering the full page area. Works best with 2, 4, or 6 images.</p>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+              <button class="btn-primary" onclick="mp.downloadFillPagePDF()" style="background:linear-gradient(135deg,#f96b3f,#f0a830);box-shadow:0 6px 18px rgba(249,107,63,0.35)">
+                📄 Download Fill-Page PDF
+              </button>
+              <button class="btn-secondary" onclick="mp.refreshPreview()">🔄 Preview</button>
+            </div>
+          </div>
+
           <!-- Combined A4 preview -->
           <div style="margin-top:24px">
             <div class="a4-preview-label" style="font-size:13px;font-weight:700;margin-bottom:10px">🖼 Combined A4 Preview</div>
@@ -361,17 +373,84 @@
             <div id="mpA4Info" style="font-size:11.5px;color:var(--text-muted);margin-top:8px;text-align:center"></div>
           </div>
 
-          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px;align-items:center">
             <button class="btn-primary" onclick="mp.downloadPDF()" style="background:linear-gradient(135deg,#6c63ff,#4a90d9);box-shadow:0 6px 20px rgba(108,99,255,0.35)">
               ⬇ Download A4 PDF
             </button>
             <button class="btn-secondary" onclick="mp.refreshPreview()">🔄 Refresh Preview</button>
+            <div style="width:1px;height:28px;background:var(--border);margin:0 4px"></div>
+            <span style="font-size:11.5px;color:var(--text-muted);font-weight:600">Save edited photo:</span>
+            <button class="btn-secondary" onclick="mp.downloadSingleImage(0,'jpeg')" title="Download Person 1's edited photo as JPG — use this for digital form uploads">
+              📷 JPG
+            </button>
+            <button class="btn-secondary" onclick="mp.downloadSingleImage(0,'png')" title="Download Person 1's edited photo as PNG (with transparency if background was removed)">
+              📷 PNG
+            </button>
           </div>
         </div>
       </div>
 
       <!-- BULK PDF BUILDER TAB -->
       <div class="tool-section" id="tab-bulkpdf">
+
+        <!-- PDF COMPRESSOR SECTION -->
+        <div class="card" style="padding:28px;margin-bottom:20px">
+          <div class="card-title">🗜 PDF Compressor</div>
+          <p style="font-size:12.5px;color:var(--text-muted);margin-bottom:18px">Upload any PDF (50–60 pages OK) and reduce its file size using the slider below. All content is preserved — only quality is adjusted.</p>
+
+          <div class="drop-zone sdt-drop" id="pcDrop" onclick="document.getElementById('pcInput').click()"
+               ondragover="sdt.dzDrag(event,'pcDrop')" ondragleave="sdt.dzLeave('pcDrop')"
+               ondrop="sdt.pcDzDrop(event)">
+            <input type="file" id="pcInput" accept=".pdf,application/pdf" onchange="sdt.pcLoadFile(this.files[0])">
+            <div id="pcPlaceholder" class="sdt-placeholder">
+              <div class="drop-icon">📄</div>
+              <div class="drop-label">Click or drag a PDF here</div>
+              <div class="drop-hint">Any PDF · up to 200 pages · 100% local processing</div>
+            </div>
+            <div id="pcFileInfo" style="display:none;text-align:center;padding:12px 0">
+              <div style="font-size:14px;font-weight:700;color:var(--accent)" id="pcFileName">file.pdf</div>
+              <div style="font-size:12px;color:var(--text-muted);margin-top:4px" id="pcFileSize">— KB · — pages</div>
+            </div>
+          </div>
+
+          <div id="pcEditor" style="display:none;margin-top:20px">
+            <div class="ctrl-group" style="margin-bottom:16px">
+              <label class="ctrl-label">🎚 Quality / Size — <span id="pcQualLabel">60%</span> &nbsp;<span style="color:var(--text-muted);font-size:11px">(lower = smaller file)</span></label>
+              <div class="slider-wrap" style="margin-top:8px">
+                <span class="ctrl-label" style="font-size:10px;white-space:nowrap">Smallest</span>
+                <input type="range" id="pcQual" min="5" max="100" value="60" step="5"
+                  oninput="sdt.pcUpdateQualLabel(this)" style="--pct:58%">
+                <span class="ctrl-label" style="font-size:10px;white-space:nowrap">Highest</span>
+              </div>
+            </div>
+
+            <div class="target-size-wrap" style="margin-bottom:16px">
+              <span class="ctrl-label" style="white-space:nowrap">Or target size:</span>
+              <input type="number" class="target-size-input" id="pcTargetKb" min="20" max="50000" placeholder="e.g. 200" oninput="sdt.pcTargetChanged(this)">
+              <span class="ctrl-label" style="white-space:nowrap;align-self:center">KB</span>
+              <button class="target-size-btn" onclick="sdt.pcApplyTarget()">Set</button>
+            </div>
+
+            <div class="stats-bar" style="margin-bottom:18px">
+              <div class="stat-item"><span class="stat-label">Original Size</span><span class="stat-val" id="pcOrigSize">—</span></div>
+              <div class="stat-item"><span class="stat-label">Pages</span><span class="stat-val" id="pcPageCount">—</span></div>
+              <div class="stat-item"><span class="stat-label">Est. Output</span><span class="stat-val orange" id="pcEstSize">—</span></div>
+            </div>
+
+            <div id="pcProgress" style="display:none;margin-bottom:14px">
+              <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px" id="pcProgressLabel">Compressing…</div>
+              <div class="bp-progress-track"><div class="bp-progress-bar" id="pcProgressBar"></div></div>
+            </div>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap">
+              <button class="btn-primary" onclick="sdt.pcDownload()" style="background:linear-gradient(135deg,#18a87a,#0e7a59);box-shadow:0 6px 20px rgba(24,168,122,0.35)">
+                ⬇ Download Compressed PDF
+              </button>
+              <button class="btn-ghost" onclick="sdt.pcClear()">Clear</button>
+            </div>
+          </div>
+        </div>
+
         <div class="card" style="padding:28px">
           <div class="card-title">📚 Bulk PDF Builder</div>
           <p style="font-size:12.5px;color:var(--text-muted);margin-bottom:18px">Upload 40–50 images or PDFs at once, arrange them in any order, preview each page, then download as one combined PDF — like a book or document.</p>
@@ -413,6 +492,7 @@
             <div class="bp-progress-track"><div class="bp-progress-bar" id="bpProgressBar"></div></div>
           </div>
         </div>
+      </div>
       </div>
 
       <!-- WATERMARK TAB -->
