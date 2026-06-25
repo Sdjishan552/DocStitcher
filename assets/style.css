@@ -427,16 +427,41 @@ input[type=range]::-webkit-slider-thumb {
 
 /* Crop canvas */
 .crop-canvas-wrap {
-  position: relative; display: inline-block; cursor: crosshair;
+  position: relative; display: block; cursor: crosshair;
   user-select: none; -webkit-user-select: none;
-  max-width: 100%; overflow: hidden; border-radius: 12px;
+  width: 100%; overflow-x: auto; overflow-y: hidden; border-radius: 12px;
+  -webkit-overflow-scrolling: touch;
 }
 #cropCanvas { display: block; max-width: 100%; border-radius: 12px; }
+#mtCropCanvas { display: block; border-radius: 10px; cursor: crosshair; touch-action: none; will-change: contents; }
 .crop-overlay {
   position: absolute; border: 2px solid var(--accent);
   box-shadow: 0 0 0 9999px rgba(30,44,64,0.4);
   border-radius: 3px; pointer-events: none;
 }
+
+/* Watermark tab layout */
+#tab-watermark .card { overflow: visible; }
+#wmDrop .drop-icon {
+  font-size: 13px; font-weight: 700; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text-muted);
+  background: rgba(249,107,63,0.09); border: 1.5px dashed var(--accent);
+  border-radius: 10px; padding: 6px 16px;
+}
+#wmEditor { display: none; margin-top: 20px; }
+#wmEditor .ctrl-row {
+  display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap;
+  margin-bottom: 0;
+}
+#wmEditor .ctrl-group { flex: 1; min-width: 140px; }
+#wmEditor .output-preview-wrap {
+  min-height: 160px; display: flex; align-items: center; justify-content: center;
+}
+#wmEditor .output-preview-wrap img {
+  max-height: 400px; width: auto; max-width: 100%;
+  object-fit: contain; display: block; margin: 0 auto;
+}
+#wmEditor > div[style*="margin-bottom:14px"] { width: 100%; }
 
 /* Watermark input */
 .wm-input {
