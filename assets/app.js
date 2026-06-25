@@ -1476,6 +1476,7 @@ window.sdt = (() => {
   let mtCropDragging=false, mtCropStartX=0, mtCropStartY=0;
   let mtDisplayScale=1, mtCropDisplayRect=null;
   let _cropRafId=null; // RAF handle for throttled crop redraws
+  let _cachedRotatedCanvas=null; // Cache of rotated image — reused during crop drag to avoid per-frame re-render on slow PCs
   let mtResultCanvas = document.createElement('canvas');
   const REMOVE_BG_API_URL = 'https://api.remove.bg/v1.0/removebg';
   const REMOVE_BG_API_KEY = 'tK4gdNqmJF55TqK3rVRyczzE';
@@ -1730,6 +1731,9 @@ window.sdt = (() => {
   }
 
   function drawMtCropCanvas(rotated) {
+    // Store the already-computed rotated canvas so redrawCropOverlay can reuse it
+    // during drag without recreating it on every mouse-move frame (perf fix for slow PCs).
+    _cachedRotatedCanvas = rotated;
     const wrap=document.getElementById('mtCropWrap');
     const maxW=Math.max((wrap.clientWidth||680) - 8, 320);
     // Always fill the wrap width so image appears big
@@ -1784,7 +1788,9 @@ window.sdt = (() => {
     if (!cv2) return;
     const ctx = cv2.getContext('2d');
     if (mtOrigImg) {
-      const rotC=makeTransformedCanvas(mtOrigImg, mtState);
+      // Use cached rotated canvas during drag — avoids recreating it on every mouse-move frame.
+      // This is the key fix for slow/old PCs (Windows 7, low RAM) where canvas operations are expensive.
+      const rotC = _cachedRotatedCanvas || makeTransformedCanvas(mtOrigImg, mtState);
       ctx.drawImage(rotC, 0, 0, cv2.width, cv2.height);
     }
     if (mtCropDisplayRect) {
@@ -1901,9 +1907,9 @@ window.sdt = (() => {
     if(input) input.value=val;
     if(label) label.textContent=val+' deg';
   }
-  function mtRotate(deg){mtState.rotateDeg=(Number(mtState.rotateDeg)||0)+Number(deg||0);mtCropDisplayRect=null;mtState.cropRect=null;mtState.hasCrop=false;mtSyncRotationControl();renderMultiTool();setTimeout(bindMtCropEvents,50);}
-  function mtSetRotation(deg){mtState.rotateDeg=Number(deg)||0;mtCropDisplayRect=null;mtState.cropRect=null;mtState.hasCrop=false;mtSyncRotationControl();renderMultiTool();setTimeout(bindMtCropEvents,50);}
-  function mtFlip(dir){if(dir==='h')mtState.flipH=!mtState.flipH;else mtState.flipV=!mtState.flipV;renderMultiTool();setTimeout(bindMtCropEvents,50);}
+  function mtRotate(deg){mtState.rotateDeg=(Number(mtState.rotateDeg)||0)+Number(deg||0);mtCropDisplayRect=null;mtState.cropRect=null;mtState.hasCrop=false;_cachedRotatedCanvas=null;mtSyncRotationControl();renderMultiTool();setTimeout(bindMtCropEvents,50);}
+  function mtSetRotation(deg){mtState.rotateDeg=Number(deg)||0;mtCropDisplayRect=null;mtState.cropRect=null;mtState.hasCrop=false;_cachedRotatedCanvas=null;mtSyncRotationControl();renderMultiTool();setTimeout(bindMtCropEvents,50);}
+  function mtFlip(dir){if(dir==='h')mtState.flipH=!mtState.flipH;else mtState.flipV=!mtState.flipV;_cachedRotatedCanvas=null;renderMultiTool();setTimeout(bindMtCropEvents,50);}
   function mtApplyCrop(){renderMultiTool();toast(Lang.t('toastCropApplied'));document.getElementById('mtApplyCropBtn').classList.add('active-state');}
   function mtClearCrop(){mtState.cropRect=null;mtState.hasCrop=false;mtCropDisplayRect=null;renderMultiTool();setTimeout(bindMtCropEvents,50);document.getElementById('mtApplyCropBtn').classList.remove('active-state');}
   function mtSetQuality(val){mtState.quality=Number(val);document.getElementById('mtQualLabel').textContent=val+'%';upSlider(document.getElementById('mtQual'));renderMultiTool();}
@@ -1914,7 +1920,7 @@ window.sdt = (() => {
     const cr=document.getElementById('mtBgColorRow');if(cr)cr.style.display='none';
     const rb=document.getElementById('mtRestoreBgBtn');if(rb)rb.style.display='none';
     const st=document.getElementById('mtBgStatus');if(st)st.textContent='';
-    mtState={rotateDeg:0,flipH:false,flipV:false,cropRect:null,quality:85,format:'jpeg',maxW:0,hasCrop:false,brightness:0};mtCropDisplayRect=null;
+    mtState={rotateDeg:0,flipH:false,flipV:false,cropRect:null,quality:85,format:'jpeg',maxW:0,hasCrop:false,brightness:0};mtCropDisplayRect=null;_cachedRotatedCanvas=null;
     document.getElementById('mtQual').value=85;document.getElementById('mtQualLabel').textContent='85%';
     document.getElementById('mtMaxW').value=0;document.getElementById('mtMaxWLabel').textContent='Original';
     document.getElementById('mtFmt').value='jpeg';
@@ -3539,7 +3545,8 @@ const mp = (() => {
       state: freshState(),
       cropDisplayRect: null, displayScale: 1,
       dragging: false, startX: 0, startY: 0,
-      count: 4
+      count: 4,
+      cachedRotC: null  // cached rotated canvas — reused during crop drag to avoid per-frame re-render on slow PCs
     }));
     // Sync button active states with JS defaults (portrait + a4)
     setOrient(orient);
@@ -3950,6 +3957,7 @@ const mp = (() => {
     const p = persons[pi];
     if (!p.img) return;
     const rotC = makePersonTransformedCanvas(p.img, p.state);
+    p.cachedRotC = rotC; // cache for use during crop drag on slow PCs
 
     // Crop
     let cropSrc = rotC;
@@ -4001,6 +4009,25 @@ const mp = (() => {
     refreshPreview();
   }
 
+  // Lightweight redraw used only during crop drag — reuses the cached rotated canvas
+  // so we don't call makePersonTransformedCanvas or refreshPreview on every mouse-move frame.
+  // This is the key fix for slow/old PCs (Windows 7, low RAM).
+  function redrawCropDragOverlay(pi) {
+    const p = persons[pi];
+    const cv = document.getElementById('mpCropCanvas'+pi);
+    if (!cv || !p.cachedRotC) { renderPersonCanvas(pi); return; }
+    const ctx = cv.getContext('2d');
+    ctx.drawImage(p.cachedRotC, 0, 0, cv.width, cv.height);
+    if (p.cropDisplayRect) {
+      const {x,y,w,h} = p.cropDisplayRect;
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.fillRect(0,0,cv.width,y); ctx.fillRect(0,y+h,cv.width,cv.height);
+      ctx.fillRect(0,y,x,h); ctx.fillRect(x+w,y,cv.width-x-w,h);
+      ctx.strokeStyle='rgba(249,107,63,1)'; ctx.lineWidth=2; ctx.setLineDash([5,4]);
+      ctx.strokeRect(x+0.5,y+0.5,w-1,h-1); ctx.setLineDash([]);
+    }
+  }
+
   function bindCropEvents(pi) {
     const cv = document.getElementById('mpCropCanvas'+pi);
     if (!cv) return;
@@ -4027,7 +4054,7 @@ const mp = (() => {
         x: Math.min(p.startX, pos.x), y: Math.min(p.startY, pos.y),
         w: Math.abs(pos.x - p.startX), h: Math.abs(pos.y - p.startY)
       };
-      renderPersonCanvas(pi);
+      redrawCropDragOverlay(pi);
     };
     cv.onmouseup = e => {
       if (!p.dragging) return; p.dragging = false;
@@ -4057,7 +4084,7 @@ const mp = (() => {
         x: Math.min(p.startX, pos.x), y: Math.min(p.startY, pos.y),
         w: Math.abs(pos.x - p.startX), h: Math.abs(pos.y - p.startY)
       };
-      renderPersonCanvas(pi);
+      redrawCropDragOverlay(pi);
     };
     cv.ontouchend = () => {
       if (!p.dragging) return; p.dragging = false;
@@ -4401,64 +4428,77 @@ const mp = (() => {
       : `${Math.min(pW,pH)}mm ${Math.max(pW,pH)}mm`;
   }
 
-  /* ---- Open a PDF blob in a new tab and trigger print ---- */
+  /* ---- Open a popup window and trigger print with correct paper size pre-set ---- */
+  /* Key insight: browsers BLOCK window.print() from hidden/offscreen iframes (blob: src).
+     The only reliable cross-browser fix is to open a small VISIBLE popup window, write the
+     print HTML into it, and call print() on that window reference directly from the parent. */
   function openPdfForPrint(pdfBlob) {
     const cssPageSize = getMpCssPageSize();
     const {pW, pH} = getMpPageDims();
     const blobUrl = URL.createObjectURL(pdfBlob);
 
-    const win = window.open('', '_blank', 'width=900,height=700');
-    if (!win) { toast('Pop-up blocked — please allow pop-ups for this page.', 'error'); URL.revokeObjectURL(blobUrl); return; }
-
-    win.document.write(`<!DOCTYPE html>
+    // Build self-contained HTML with correct @page size and auto-print
+    const html = `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
 <title>Print Photos</title>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
-  @page { size: ${cssPageSize}; margin: 0; }
-  html, body { width:100%; height:100%; background:#fff; }
+  @page {
+    size: ${cssPageSize};
+    margin: 0;
+  }
+  html, body {
+    width: ${pW}mm;
+    height: ${pH}mm;
+    overflow: hidden;
+    background: #fff;
+  }
   embed {
     display: block;
     width: ${pW}mm;
     height: ${pH}mm;
   }
-  @media screen {
-    body {
-      display: flex;
-      align-items: flex-start;
-      justify-content: center;
-      background: #555;
-      min-height: 100vh;
-      padding: 24px 0 80px;
-    }
-    embed {
-      box-shadow: 0 4px 32px rgba(0,0,0,0.4);
-    }
-  }
-  @media print {
-    body { background:#fff; padding:0; }
-    .no-print { display:none !important; }
-    embed { width:${pW}mm; height:${pH}mm; }
-  }
 </style>
 </head>
 <body>
-  <embed id="pdfEmbed" src="${blobUrl}" type="application/pdf" width="${pW}mm" height="${pH}mm">
-  <div class="no-print" style="position:fixed;bottom:20px;left:50%;transform:translateX(-50%);display:flex;gap:12px;z-index:9999">
-    <button onclick="window.print()" style="padding:12px 28px;background:#6c63ff;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;box-shadow:0 4px 16px rgba(108,99,255,0.4)">🖨 Print</button>
-    <button onclick="window.close()" style="padding:12px 20px;background:#444;color:#fff;border:none;border-radius:10px;font-size:14px;cursor:pointer">✕ Close</button>
-  </div>
+  <embed src="${blobUrl}" type="application/pdf" width="${pW}mm" height="${pH}mm">
   <script>
-    // Revoke blob URL after a generous delay
-    setTimeout(() => URL.revokeObjectURL('${blobUrl}'), 120000);
-    // Auto-print after the PDF embed has a moment to load
-    setTimeout(() => window.print(), 1200);
+    window.onload = function() {
+      setTimeout(function() { window.print(); }, 800);
+    };
+    setTimeout(function() { window.print(); }, 1400);
+    window.onafterprint = function() {
+      setTimeout(function() {
+        URL.revokeObjectURL('${blobUrl}');
+        window.close();
+      }, 1000);
+    };
   <\/script>
 </body>
-</html>`);
-    win.document.close();
+</html>`;
+
+    // Open a real visible popup — browsers only allow print() in visible windows
+    const popup = window.open('', '_blank', 'width=800,height=600,menubar=no,toolbar=no,location=no,status=no');
+    if (!popup) {
+      // Popup was blocked — fall back to opening the PDF blob directly
+      toast('Popup blocked by browser. Please allow popups for this site, or use the download button and print from there.', 'error');
+      URL.revokeObjectURL(blobUrl);
+      return;
+    }
+
+    popup.document.open();
+    popup.document.write(html);
+    popup.document.close();
+
+    // Safety: if popup closes without printing, clean up blob URL
+    const cleanup = setInterval(() => {
+      if (popup.closed) {
+        clearInterval(cleanup);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+      }
+    }, 1000);
   }
 
   /* ---- Print: same PDF as downloadPDF ---- */
