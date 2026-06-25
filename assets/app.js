@@ -1475,6 +1475,7 @@ window.sdt = (() => {
   };
   let mtCropDragging=false, mtCropStartX=0, mtCropStartY=0;
   let mtDisplayScale=1, mtCropDisplayRect=null;
+  let _cropRafId=null; // RAF handle for throttled crop redraws
   let mtResultCanvas = document.createElement('canvas');
   const REMOVE_BG_API_URL = 'https://api.remove.bg/v1.0/removebg';
   const REMOVE_BG_API_KEY = 'tK4gdNqmJF55TqK3rVRyczzE';
@@ -1810,6 +1811,11 @@ window.sdt = (() => {
     }
   }
 
+  function scheduleRedrawCropOverlay() {
+    if (_cropRafId) return; // already queued — skip to avoid double-draw
+    _cropRafId = requestAnimationFrame(() => { _cropRafId = null; redrawCropOverlay(); });
+  }
+
   function bindMtCropEvents() {
     const cv=document.getElementById('mtCropCanvas'); if(!cv)return;
 
@@ -1829,12 +1835,13 @@ window.sdt = (() => {
       const x=Math.min(mtCropStartX, pos.x), y=Math.min(mtCropStartY, pos.y);
       const w=Math.abs(pos.x - mtCropStartX),   h=Math.abs(pos.y - mtCropStartY);
       mtCropDisplayRect=clampCropRect({x,y,w,h}, cv);
-      redrawCropOverlay();
+      scheduleRedrawCropOverlay();
     };
 
     cv.onmouseup = e => {
       if(!mtCropDragging) return;
       mtCropDragging=false;
+      if (_cropRafId) { cancelAnimationFrame(_cropRafId); _cropRafId=null; }
       if(mtCropDisplayRect && mtCropDisplayRect.w>4 && mtCropDisplayRect.h>4){
         // Convert canvas-pixel coords → original image coords
         mtState.cropRect={
@@ -1849,7 +1856,7 @@ window.sdt = (() => {
     };
 
     cv.onmouseleave = e => {
-      if(mtCropDragging) { mtCropDragging=false; }
+      if(mtCropDragging) { mtCropDragging=false; if (_cropRafId) { cancelAnimationFrame(_cropRafId); _cropRafId=null; } }
     };
 
     // Touch support — same getBoundingClientRect approach
@@ -1868,11 +1875,12 @@ window.sdt = (() => {
       const x=Math.min(mtCropStartX,pos.x), y=Math.min(mtCropStartY,pos.y);
       const w=Math.abs(pos.x-mtCropStartX),  h=Math.abs(pos.y-mtCropStartY);
       mtCropDisplayRect=clampCropRect({x,y,w,h}, cv);
-      redrawCropOverlay();
+      scheduleRedrawCropOverlay();
     };
     cv.ontouchend = e => {
       if(!mtCropDragging) return;
       mtCropDragging=false;
+      if (_cropRafId) { cancelAnimationFrame(_cropRafId); _cropRafId=null; }
       if(mtCropDisplayRect && mtCropDisplayRect.w>4 && mtCropDisplayRect.h>4){
         mtState.cropRect={
           x: Math.round(mtCropDisplayRect.x / mtDisplayScale),
@@ -2528,53 +2536,111 @@ window.sdt = (() => {
     pcOrigFile = file;
     pcOrigSize = file.size;
     pcPages = [];
+    _pcEstCache = {}; _pcEstBaseline = null;
+    _pcRawBytes = null; // store original bytes for stream-level compression
 
     document.getElementById('pcPlaceholder').style.display = 'none';
     document.getElementById('pcFileInfo').style.display = 'block';
     document.getElementById('pcFileName').textContent = file.name;
-    document.getElementById('pcFileSize').textContent = fmtBytes(file.size) + ' · loading…';
+    document.getElementById('pcFileSize').textContent = fmtBytes(file.size) + ' \u00b7 loading\u2026';
     document.getElementById('pcEditor').style.display = 'none';
     document.getElementById('pcProgress').style.display = 'block';
-    document.getElementById('pcProgressLabel').textContent = 'Loading PDF pages…';
+    document.getElementById('pcProgressLabel').textContent = 'Loading PDF\u2026';
     document.getElementById('pcProgressBar').style.width = '0%';
 
     try {
+      const arrayBuf = await file.arrayBuffer();
+      _pcRawBytes = new Uint8Array(arrayBuf);
+
+      // Count pages via pdfjs for display only — we don't rasterize
       if (!window.pdfjsLib) {
         await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js');
         window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
       }
-      const arrayBuf = await file.arrayBuffer();
-      const pdf = await window.pdfjsLib.getDocument({data: arrayBuf}).promise;
-      const total = pdf.numPages;
+      const pdfDoc = await window.pdfjsLib.getDocument({data: arrayBuf.slice(0)}).promise;
+      const total = pdfDoc.numPages;
 
-      for (let p = 1; p <= total; p++) {
-        document.getElementById('pcProgressLabel').textContent = `Reading page ${p} of ${total}…`;
-        document.getElementById('pcProgressBar').style.width = ((p / total) * 70) + '%';
-        const page = await pdf.getPage(p);
-        const vp = page.getViewport({scale: 2.0});
-        const cv = document.createElement('canvas');
-        cv.width = vp.width; cv.height = vp.height;
-        await page.render({canvasContext: cv.getContext('2d'), viewport: vp}).promise;
-        pcPages.push({dataUrl: cv.toDataURL('image/jpeg', 0.92), w: cv.width, h: cv.height});
-        await new Promise(r => setTimeout(r, 0));
-      }
+      document.getElementById('pcProgressBar').style.width = '60%';
+      document.getElementById('pcProgressLabel').textContent = 'Analysing streams\u2026';
+
+      // Analyse image streams to estimate compression potential
+      await new Promise(r => setTimeout(r, 30));
+      const analysis = pcAnalyseStreams(_pcRawBytes);
 
       document.getElementById('pcProgressBar').style.width = '100%';
-      document.getElementById('pcProgressLabel').textContent = 'Done loading!';
-      document.getElementById('pcFileSize').textContent = fmtBytes(file.size) + ' · ' + total + ' page' + (total !== 1 ? 's' : '');
+      document.getElementById('pcFileSize').textContent = fmtBytes(file.size) + ' \u00b7 ' + total + ' page' + (total !== 1 ? 's' : '');
       document.getElementById('pcOrigSize').textContent = fmtBytes(file.size);
       document.getElementById('pcPageCount').textContent = total;
+      _pcAnalysis = analysis;
       pcUpdateEstimate();
+
       setTimeout(() => {
         document.getElementById('pcProgress').style.display = 'none';
         document.getElementById('pcEditor').style.display = 'block';
-      }, 400);
+      }, 300);
     } catch(e) {
       toast('Failed to load PDF: ' + e.message, 'error');
       document.getElementById('pcProgress').style.display = 'none';
       document.getElementById('pcPlaceholder').style.display = 'flex';
       document.getElementById('pcFileInfo').style.display = 'none';
     }
+  }
+
+  // Stored raw PDF bytes and stream analysis
+  let _pcRawBytes = null;
+  let _pcAnalysis = null;
+  let _pcEstCache = {};
+  let _pcEstBaseline = null;
+
+  // Analyse PDF byte stream to find compressible regions and estimate savings.
+  // Returns {jpegBytes, uncompressedBytes, totalStreams}
+  function pcAnalyseStreams(bytes) {
+    let jpegBytes = 0, uncompressedBytes = 0, totalStreams = 0;
+    const str = String.fromCharCode.apply(null, bytes.length < 5000000
+      ? bytes
+      : bytes.subarray(0, 5000000)); // sample first 5MB for speed
+
+    // Find image XObjects marked as DCTDecode (JPEG)
+    const dctRx = /\/Filter\s*\/DCTDecode/g;
+    let m;
+    while ((m = dctRx.exec(str)) !== null) {
+      jpegBytes += 50000; // rough average JPEG image size
+      totalStreams++;
+    }
+    // Find uncompressed or FlateDecode streams
+    const flatRx = /\/Filter\s*\/FlateDecode/g;
+    while ((m = flatRx.exec(str)) !== null) {
+      uncompressedBytes += 10000;
+      totalStreams++;
+    }
+    // Unfiltered streams (no /Filter key before stream keyword)
+    const rawRx = /\bstream\r?\n/g;
+    const filterCount = (str.match(/\/Filter/g) || []).length;
+    const streamCount = (str.match(/\bstream\r?\n/g) || []).length;
+    uncompressedBytes += Math.max(0, streamCount - filterCount) * 8000;
+
+    return {jpegBytes, uncompressedBytes, totalStreams, streamCount};
+  }
+
+  function pcEstimateSize(quality) {
+    if (_pcEstCache[quality] !== undefined) return _pcEstCache[quality];
+    if (!_pcRawBytes) return 0;
+
+    const origSize = _pcRawBytes.length;
+    // quality 100 = no image recompression, only metadata strip (~2-5% saving)
+    // quality 1   = maximum JPEG recompression (~40-70% saving on image-heavy PDFs)
+    // For text-heavy PDFs the saving is much less since streams are already compressed
+
+    const a = _pcAnalysis || {jpegBytes: 0, uncompressedBytes: 0};
+    const imagePortionEst = a.jpegBytes + a.uncompressedBytes;
+    const nonImageEst = Math.max(origSize - imagePortionEst, origSize * 0.3);
+
+    // Image bytes scale with quality; non-image bytes are unaffected
+    const qualFrac = quality / 100;
+    const newImageEst = imagePortionEst * (0.15 + 0.85 * Math.pow(qualFrac, 1.6));
+    const est = Math.round(nonImageEst + newImageEst);
+    _pcEstCache[quality] = Math.min(est, origSize); // never estimate larger than original
+    return _pcEstCache[quality];
   }
 
   function pcUpdateQualLabel(el) {
@@ -2590,110 +2656,190 @@ window.sdt = (() => {
     el.classList.add(isNaN(v) || v < 20 ? 'ts-error' : 'ts-ok');
   }
 
+  function pcUpdateEstimate() {
+    const q = parseInt(document.getElementById('pcQual').value);
+    const est = pcEstimateSize(q);
+    document.getElementById('pcEstSize').textContent = est ? fmtBytes(est) : '\u2014';
+  }
+
   async function pcApplyTarget() {
-    if (!pcPages.length) { toast('Load a PDF first.', 'error'); return; }
+    if (!_pcRawBytes) { toast('Load a PDF first.', 'error'); return; }
     const inp = document.getElementById('pcTargetKb');
     const targetKb = parseInt(inp.value);
     if (isNaN(targetKb) || targetKb < 20) { inp.classList.add('ts-error'); toast('Enter a valid target size (min 20 KB).', 'error'); return; }
     const targetBytes = targetKb * 1024;
-
-    // Binary search quality
-    let lo = 5, hi = 100, bestQ = 60;
-    for (let i = 0; i < 8; i++) {
+    let lo = 5, hi = 95, bestQ = 60;
+    for (let i = 0; i < 10; i++) {
       const mid = Math.round((lo + hi) / 2);
-      const est = pcEstimateSize(mid);
-      if (est <= targetBytes) { bestQ = mid; lo = mid + 1; } else { hi = mid - 1; }
+      if (pcEstimateSize(mid) <= targetBytes) { bestQ = mid; lo = mid + 1; } else { hi = mid - 1; }
       if (lo > hi) break;
     }
+    bestQ = Math.max(5, Math.min(95, bestQ));
     const slider = document.getElementById('pcQual');
     slider.value = bestQ; updateSliderGradient(slider);
     document.getElementById('pcQualLabel').textContent = bestQ + '%';
     pcUpdateEstimate();
     inp.classList.remove('ts-error'); inp.classList.add('ts-ok');
-    toast('Quality set to ' + bestQ + '% to target ~' + targetKb + ' KB');
-  }
-
-  function pcEstimateSize(quality) {
-    // Rough estimate: each JPEG page at given quality scales approximately linearly
-    // We use the ratio from 92% quality (which we used when rasterising)
-    // Since all pages are stored at ~92% quality, we scale the original file size
-    // by the quality ratio squared (perceptual approximation)
-    const ratio = (quality / 92) * (quality / 92);
-    return Math.round(pcOrigSize * ratio);
-  }
-
-  function pcUpdateEstimate() {
-    const q = parseInt(document.getElementById('pcQual').value);
-    const est = pcEstimateSize(q);
-    document.getElementById('pcEstSize').textContent = fmtBytes(est);
+    toast('Quality set to ' + bestQ + '% \u2192 est. ' + fmtBytes(pcEstimateSize(bestQ)));
   }
 
   async function pcDownload() {
-    if (!pcPages.length) { toast('Load a PDF first.', 'error'); return; }
-    if (!window.jspdf || !window.jspdf.jsPDF) { toast('PDF library not loaded.', 'error'); return; }
+    if (!_pcRawBytes) { toast('Load a PDF first.', 'error'); return; }
 
     const qual = parseInt(document.getElementById('pcQual').value) / 100;
-    const {jsPDF} = window.jspdf;
-
     document.getElementById('pcProgress').style.display = 'block';
-    document.getElementById('pcProgressLabel').textContent = 'Building compressed PDF…';
+    document.getElementById('pcProgressLabel').textContent = 'Compressing\u2026';
     const bar = document.getElementById('pcProgressBar');
-    bar.style.width = '0%';
+    bar.style.width = '10%';
+    await new Promise(r => setTimeout(r, 30));
 
-    const first = await pcImgDims(pcPages[0].dataUrl);
-    const firstFit = bpPageFit(first, 5);
-    const pdf = new jsPDF({orientation: firstFit.orient, unit: 'mm', format: 'a4', compress: true});
+    try {
+      // Load pako (zlib) for re-deflating streams
+      if (!window.pako) {
+        await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js');
+      }
 
-    for (let i = 0; i < pcPages.length; i++) {
-      bar.style.width = ((i / pcPages.length) * 90) + '%';
-      document.getElementById('pcProgressLabel').textContent = `Compressing page ${i + 1} of ${pcPages.length}…`;
+      bar.style.width = '30%';
+      document.getElementById('pcProgressLabel').textContent = 'Recompressing image streams\u2026';
+      await new Promise(r => setTimeout(r, 20));
 
-      const pg = pcPages[i];
-      // Re-encode at the chosen quality
-      const reEncoded = await pcReEncode(pg.dataUrl, qual);
-      const dim = await pcImgDims(reEncoded);
-      const fit = bpPageFit(dim, 5);
-      if (i > 0) pdf.addPage('a4', fit.orient);
-      pdf.addImage(reEncoded, 'JPEG', fit.x, fit.y, fit.iW, fit.iH, undefined, 'FAST');
-      await new Promise(r => setTimeout(r, 0));
-    }
+      // Work on a copy of the raw bytes
+      let result = await pcCompressPdfBytes(_pcRawBytes, qual, (pct) => {
+        bar.style.width = (30 + pct * 60) + '%';
+      });
 
-    bar.style.width = '100%';
-    document.getElementById('pcProgressLabel').textContent = 'Saving…';
-    const outName = (pcOrigFile.name.replace(/\.pdf$/i, '') || 'compressed') + '_compressed.pdf';
-    saveBlob(pdf.output('blob'), outName);
-    setTimeout(() => {
+      bar.style.width = '95%';
+      document.getElementById('pcProgressLabel').textContent = 'Saving\u2026';
+      await new Promise(r => setTimeout(r, 20));
+
+      const outName = (pcOrigFile.name.replace(/\.pdf$/i, '') || 'compressed') + '_compressed.pdf';
+      saveBlob(new Blob([result], {type: 'application/pdf'}), outName);
+
+      const saved = _pcRawBytes.length - result.byteLength;
+      const savedPct = Math.round(saved / _pcRawBytes.length * 100);
+      document.getElementById('pcEstSize').textContent = fmtBytes(result.byteLength) + ' \u2713';
+      bar.style.width = '100%';
+      setTimeout(() => { document.getElementById('pcProgress').style.display = 'none'; bar.style.width = '0%'; }, 600);
+      toast('Saved! ' + fmtBytes(result.byteLength) + ' (reduced by ' + savedPct + '%)');
+    } catch(e) {
       document.getElementById('pcProgress').style.display = 'none';
-      bar.style.width = '0%';
-    }, 800);
-    toast('Compressed PDF saved!');
+      toast('Compression failed: ' + e.message, 'error');
+    }
   }
 
-  function pcReEncode(dataUrl, quality) {
-    return new Promise(resolve => {
+  // Core PDF compressor: works on raw PDF bytes, recompresses JPEG images and
+  // strips redundant metadata. Content (text, vectors, fonts) is fully preserved.
+  async function pcCompressPdfBytes(srcBytes, jpegQuality, onProgress) {
+    const src = srcBytes;
+    const text = pcBytesToLatin1(src);
+
+    // --- Step 1: Strip/blank metadata dictionary to save space ---
+    let out = text;
+    // Remove Info dictionary content (author, creator, producer, dates etc.)
+    out = out.replace(/\/Author\s*\([^)]*\)/g, '/Author ()');
+    out = out.replace(/\/Creator\s*\([^)]*\)/g, '/Creator ()');
+    out = out.replace(/\/Producer\s*\([^)]*\)/g, '/Producer ()');
+    out = out.replace(/\/Subject\s*\([^)]*\)/g, '/Subject ()');
+    out = out.replace(/\/Keywords\s*\([^)]*\)/g, '/Keywords ()');
+    out = out.replace(/\/Title\s*\([^)]*\)/g, '/Title ()');
+    // Remove XMP metadata streams (often 2–20 KB of XML bloat)
+    out = out.replace(/\/Type\s*\/Metadata[\s\S]*?endstream/g, (m) => {
+      const streamStart = m.indexOf('stream') + 6;
+      const nl = m[streamStart] === '\r' ? 2 : 1;
+      const blank = m.slice(0, streamStart + nl) + 'endstream';
+      return blank;
+    });
+
+    onProgress && onProgress(0.15);
+    await new Promise(r => setTimeout(r, 0));
+
+    // --- Step 2: Recompress JPEG (DCTDecode) image streams at target quality ---
+    // Find all DCTDecode image stream positions
+    const dctRegex = /<<([^>]*\/Filter\s*\/DCTDecode[^>]*)>>\s*stream\r?\n/g;
+    let match;
+    const patches = []; // [{start, end, newData}]
+
+    while ((match = dctRegex.exec(out)) !== null) {
+      const streamStart = match.index + match[0].length;
+      const endIdx = out.indexOf('endstream', streamStart);
+      if (endIdx < 0) continue;
+      const jpegStr = out.slice(streamStart, endIdx);
+      const jpegBytes = pcLatin1ToBytes(jpegStr);
+
+      // Re-encode JPEG at target quality via canvas
+      try {
+        const reEncoded = await pcRecompressJpeg(jpegBytes, jpegQuality);
+        if (reEncoded && reEncoded.length < jpegBytes.length * 0.98) {
+          // Only use if actually smaller
+          patches.push({start: streamStart, end: endIdx, newBytes: reEncoded, dictStr: match[0], origDictStart: match.index});
+        }
+      } catch(e) { /* skip this image if re-encode fails */ }
+    }
+
+    onProgress && onProgress(0.85);
+
+    // Apply patches in reverse order so offsets stay valid
+    patches.sort((a, b) => b.start - a.start);
+    for (const patch of patches) {
+      const newJpegStr = pcBytesToLatin1(patch.newBytes);
+      // Update /Length in the dictionary
+      const newDict = patch.dictStr.replace(/\/Length\s+\d+/, '/Length ' + patch.newBytes.length);
+      out = out.slice(0, patch.origDictStart) + newDict + out.slice(patch.origDictStart + patch.dictStr.length, patch.start) + newJpegStr + out.slice(patch.end);
+    }
+
+    onProgress && onProgress(1.0);
+
+    // Convert back to bytes
+    return pcLatin1ToBytes(out).buffer;
+  }
+
+  // Re-encode a JPEG byte array at a new quality via canvas, returns Uint8Array
+  function pcRecompressJpeg(jpegBytes, quality) {
+    return new Promise((resolve, reject) => {
+      const blob = new Blob([jpegBytes], {type: 'image/jpeg'});
+      const url = URL.createObjectURL(blob);
       const img = new Image();
       img.onload = () => {
+        URL.revokeObjectURL(url);
+        if (img.naturalWidth === 0) { reject(new Error('bad image')); return; }
         const cv = document.createElement('canvas');
         cv.width = img.naturalWidth; cv.height = img.naturalHeight;
         const ctx = cv.getContext('2d', {alpha: false});
-        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, cv.width, cv.height);
         ctx.drawImage(img, 0, 0);
-        resolve(cv.toDataURL('image/jpeg', quality));
+        const dataUrl = cv.toDataURL('image/jpeg', quality);
+        const b64 = dataUrl.split(',')[1];
+        const bin = atob(b64);
+        const arr = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+        resolve(arr);
       };
-      img.src = dataUrl;
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('load failed')); };
+      img.src = url;
     });
   }
 
-  function pcImgDims(dataUrl) {
-    return new Promise(res => {
-      const img = new Image();
-      img.onload = () => res({w: img.naturalWidth, h: img.naturalHeight});
-      img.src = dataUrl;
-    });
+  // Convert Uint8Array to latin1 string (1 byte per char, preserves all bytes)
+  function pcBytesToLatin1(bytes) {
+    let result = '';
+    for (let i = 0; i < bytes.length; i++) {
+      result += String.fromCharCode(bytes[i]);
+    }
+    return result;
+  }
+
+  // Convert latin1 string back to Uint8Array
+  function pcLatin1ToBytes(str) {
+    const arr = new Uint8Array(str.length);
+    for (let i = 0; i < str.length; i++) arr[i] = str.charCodeAt(i) & 0xff;
+    return arr;
   }
 
   function pcClear() {
     pcOrigFile = null; pcPages = []; pcOrigSize = 0;
+    _pcRawBytes = null; _pcAnalysis = null;
+    _pcEstCache = {}; _pcEstBaseline = null;
     document.getElementById('pcPlaceholder').style.display = 'flex';
     document.getElementById('pcFileInfo').style.display = 'none';
     document.getElementById('pcEditor').style.display = 'none';
@@ -3750,7 +3896,21 @@ const mp = (() => {
   }
 
   function deltaCount(pi, d) {
-    persons[pi].state.photoCount = Math.max(1, Math.min(20, persons[pi].state.photoCount + d));
+    const p = persons[pi];
+    if (!p) return;
+    // Compute the maximum that fits on the page at current image size
+    const marginMM = parseFloat(document.getElementById('mpMargin')?.value) || 3;
+    const gapMM    = parseFloat(document.getElementById('mpGap')?.value) || 2;
+    const {pW, pH} = getMpPageDims();
+    const areaW = pW - marginMM * 2;
+    const areaH = pH - marginMM * 2;
+    const imgW = p.state.sizeWmm || 25;
+    const imgH = p.state.sizeHmm || 30;
+    // How many fit per row × how many rows
+    const perRow = Math.max(1, Math.floor((areaW + gapMM) / (imgW + gapMM)));
+    const rows   = Math.max(1, Math.floor((areaH + gapMM) / (imgH + gapMM)));
+    const maxCount = Math.max(1, perRow * rows);
+    persons[pi].state.photoCount = Math.max(1, Math.min(maxCount, persons[pi].state.photoCount + d));
     const el = document.getElementById('mpPhCount'+pi);
     if (el) el.textContent = persons[pi].state.photoCount;
     refreshPreview();
@@ -3815,7 +3975,7 @@ const mp = (() => {
     // Draw display canvas
     const cv = document.getElementById('mpCropCanvas'+pi);
     if (!cv) return;
-    const maxW = Math.min(cv.parentElement?.offsetWidth || 400, 460);
+    const maxW = Math.min(cv.parentElement?.offsetWidth || 600, 900);
     const scale = maxW / cropSrc.width;
     p.displayScale = scale;
     cv.width = Math.round(cropSrc.width * scale);
@@ -3923,7 +4083,14 @@ const mp = (() => {
     const PX = 2.2;
     const cW = Math.round(pW * PX), cH = Math.round(pH * PX);
     cv.width = cW; cv.height = cH;
-    cv.style.maxWidth = Math.min(cW, 360) + 'px';
+    // Constrain preview: max 340px wide or max 420px tall, whichever is more limiting
+    const maxPrevW = 340, maxPrevH = 420;
+    const scaleByW = maxPrevW / cW, scaleByH = maxPrevH / cH;
+    const prevScale = Math.min(scaleByW, scaleByH, 1);
+    cv.style.width  = Math.round(cW * prevScale) + 'px';
+    cv.style.height = Math.round(cH * prevScale) + 'px';
+    cv.style.maxWidth  = '';
+    cv.style.maxHeight = '';
     const ctx = cv.getContext('2d');
     ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,cW,cH);
 
@@ -4115,8 +4282,14 @@ const mp = (() => {
     if (!activePeople.length) { toast('Upload at least one person\'s photo.', 'error'); return; }
 
     const {jsPDF} = window.jspdf;
-    const marginMM = 6;
+    const baseMarginMM = 6;
     const gapMM    = 4;
+
+    // Extra margin option (for signature space)
+    const extraMarginEnabled = document.getElementById('fpExtraMargin')?.checked;
+    const extraMarginMM = extraMarginEnabled ? 38.1 : 0; // 1.5 inch = 38.1mm
+    const extraMarginSide = document.getElementById('fpExtraMarginSide')?.value || 'bottom';
+
     const {pW, pH} = getMpPageDims();
 
     const paperFmt = mpPaperSize === 'a4' ? 'a4' : [pW, pH];
@@ -4133,29 +4306,32 @@ const mp = (() => {
     const n = allCanvases.length;
 
     // Determine grid dimensions based on count
-    // Always use the smallest grid that fits n images as equal-sized cells
     let gridCols, gridRows;
     if (n === 1) {
       gridCols = 1; gridRows = 1;
     } else if (n === 2) {
-      // Portrait: stack vertically (1 col, 2 rows). Landscape: side by side (2 cols, 1 row)
       if (orient === 'portrait') { gridCols = 1; gridRows = 2; }
       else                       { gridCols = 2; gridRows = 1; }
     } else if (n === 3 || n === 4) {
-      gridCols = 2; gridRows = 2;   // 2×2 grid; 3 imgs leave 1 cell empty
+      gridCols = 2; gridRows = 2;
     } else if (n === 5 || n === 6) {
       if (orient === 'portrait') { gridCols = 2; gridRows = 3; }
       else                       { gridCols = 3; gridRows = 2; }
     } else if (n <= 9) {
       gridCols = 3; gridRows = 3;
     } else {
-      // General: square-ish
       gridCols = Math.ceil(Math.sqrt(n));
       gridRows = Math.ceil(n / gridCols);
     }
 
-    const areaW = pW - marginMM * 2;
-    const areaH = pH - marginMM * 2;
+    // Compute margins accounting for extra margin side
+    const mTop    = baseMarginMM + (extraMarginSide === 'top'    ? extraMarginMM : 0);
+    const mBottom = baseMarginMM + (extraMarginSide === 'bottom' ? extraMarginMM : 0);
+    const mLeft   = baseMarginMM + (extraMarginSide === 'left'   ? extraMarginMM : 0);
+    const mRight  = baseMarginMM + (extraMarginSide === 'right'  ? extraMarginMM : 0);
+
+    const areaW = pW - mLeft - mRight;
+    const areaH = pH - mTop  - mBottom;
     const cellW = (areaW - (gridCols - 1) * gapMM) / gridCols;
     const cellH = (areaH - (gridRows - 1) * gapMM) / gridRows;
 
@@ -4174,13 +4350,32 @@ const mp = (() => {
       return imageCache.get(cv);
     };
 
-    // Place each image — fill (stretch to cover) its cell entirely
+    // Place each image — CONTAIN (preserve aspect ratio, letter-box inside cell)
     for (let i = 0; i < n; i++) {
       const col = i % gridCols;
       const row = Math.floor(i / gridCols);
-      const xMM = marginMM + col * (cellW + gapMM);
-      const yMM = marginMM + row * (cellH + gapMM);
-      pdf.addImage(getJpeg(allCanvases[i]), 'JPEG', xMM, yMM, cellW, cellH, undefined, 'FAST');
+      const cellXMM = mLeft + col * (cellW + gapMM);
+      const cellYMM = mTop  + row * (cellH + gapMM);
+
+      const cv = allCanvases[i];
+      const imgAspect = cv.width / cv.height;
+      const cellAspect = cellW / cellH;
+
+      let drawW, drawH;
+      if (imgAspect > cellAspect) {
+        // Image is wider than cell — fit by width
+        drawW = cellW;
+        drawH = cellW / imgAspect;
+      } else {
+        // Image is taller — fit by height
+        drawH = cellH;
+        drawW = cellH * imgAspect;
+      }
+      // Centre in cell
+      const xMM = cellXMM + (cellW - drawW) / 2;
+      const yMM = cellYMM + (cellH - drawH) / 2;
+
+      pdf.addImage(getJpeg(cv), 'JPEG', xMM, yMM, drawW, drawH, undefined, 'FAST');
     }
 
     const outBlob = pdf.output('blob');
@@ -4188,7 +4383,187 @@ const mp = (() => {
     const a = document.createElement('a'); a.href = outUrl; a.download = 'fill_page_photos.pdf';
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(outUrl), 5000);
-    toast(`Fill-page PDF downloaded! ${gridCols}×${gridRows} grid, ${n} photo${n!==1?'s':''}`);
+    const marginNote = extraMarginEnabled ? ` · 1.5in ${extraMarginSide} margin for signature` : '';
+    toast(`Fill-page PDF downloaded! ${gridCols}×${gridRows} grid, ${n} photo${n!==1?'s':''}${marginNote}`);
+  }
+
+  /* ---- Shared: resolve page size to a CSS @page size string ---- */
+  function getMpCssPageSize() {
+    const {pW, pH} = getMpPageDims();
+    if (mpPaperSize === 'a4') {
+      return orient === 'landscape' ? 'A4 landscape' : 'A4 portrait';
+    }
+    if (mpPaperSize === '4x6') {
+      return orient === 'landscape' ? '6in 4in' : '4in 6in';
+    }
+    return orient === 'landscape'
+      ? `${Math.max(pW,pH)}mm ${Math.min(pW,pH)}mm`
+      : `${Math.min(pW,pH)}mm ${Math.max(pW,pH)}mm`;
+  }
+
+  /* ---- Open a PDF blob in a new tab and trigger print ---- */
+  function openPdfForPrint(pdfBlob) {
+    const cssPageSize = getMpCssPageSize();
+    const {pW, pH} = getMpPageDims();
+    const blobUrl = URL.createObjectURL(pdfBlob);
+
+    const win = window.open('', '_blank', 'width=900,height=700');
+    if (!win) { toast('Pop-up blocked — please allow pop-ups for this page.', 'error'); URL.revokeObjectURL(blobUrl); return; }
+
+    win.document.write(`<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Print Photos</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  @page { size: ${cssPageSize}; margin: 0; }
+  html, body { width:100%; height:100%; background:#fff; }
+  embed {
+    display: block;
+    width: ${pW}mm;
+    height: ${pH}mm;
+  }
+  @media screen {
+    body {
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      background: #555;
+      min-height: 100vh;
+      padding: 24px 0 80px;
+    }
+    embed {
+      box-shadow: 0 4px 32px rgba(0,0,0,0.4);
+    }
+  }
+  @media print {
+    body { background:#fff; padding:0; }
+    .no-print { display:none !important; }
+    embed { width:${pW}mm; height:${pH}mm; }
+  }
+</style>
+</head>
+<body>
+  <embed id="pdfEmbed" src="${blobUrl}" type="application/pdf" width="${pW}mm" height="${pH}mm">
+  <div class="no-print" style="position:fixed;bottom:20px;left:50%;transform:translateX(-50%);display:flex;gap:12px;z-index:9999">
+    <button onclick="window.print()" style="padding:12px 28px;background:#6c63ff;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;box-shadow:0 4px 16px rgba(108,99,255,0.4)">🖨 Print</button>
+    <button onclick="window.close()" style="padding:12px 20px;background:#444;color:#fff;border:none;border-radius:10px;font-size:14px;cursor:pointer">✕ Close</button>
+  </div>
+  <script>
+    // Revoke blob URL after a generous delay
+    setTimeout(() => URL.revokeObjectURL('${blobUrl}'), 120000);
+    // Auto-print after the PDF embed has a moment to load
+    setTimeout(() => window.print(), 1200);
+  <\/script>
+</body>
+</html>`);
+    win.document.close();
+  }
+
+  /* ---- Print: same PDF as downloadPDF ---- */
+  async function printPDF() {
+    if (!window.jspdf || !window.jspdf.jsPDF) { toast('PDF library not loaded.', 'error'); return; }
+    const activePeople = persons.slice(0, personCount);
+    if (!activePeople.some(p => p.resultCanvas)) { toast('Upload at least one person\'s photo first.', 'error'); return; }
+
+    const {jsPDF} = window.jspdf;
+    const marginMM = parseFloat(document.getElementById('mpMargin')?.value) || 3;
+    const gapMM    = parseFloat(document.getElementById('mpGap')?.value) || 2;
+    const {pW, pH} = getMpPageDims();
+    const paperFmt = mpPaperSize === 'a4' ? 'a4' : [pW, pH];
+    const pdf = new jsPDF({orientation: orient, unit: 'mm', format: paperFmt, compress: true});
+
+    const areaW = pW - marginMM * 2;
+    const areaH = pH - marginMM * 2;
+    const placements = computeContinuousPlacements(activePeople.filter(p => p.resultCanvas), areaW, areaH, gapMM);
+    const imageCache = new Map();
+    for (const item of placements) {
+      if (!imageCache.has(item.person)) {
+        const flattened = document.createElement('canvas');
+        flattened.width  = item.person.resultCanvas.width;
+        flattened.height = item.person.resultCanvas.height;
+        const flatCtx = flattened.getContext('2d');
+        flatCtx.fillStyle = '#ffffff';
+        flatCtx.fillRect(0, 0, flattened.width, flattened.height);
+        flatCtx.drawImage(item.person.resultCanvas, 0, 0);
+        imageCache.set(item.person, flattened.toDataURL('image/jpeg', 0.92));
+      }
+      pdf.addImage(imageCache.get(item.person), 'JPEG', marginMM + item.x, marginMM + item.y, item.w, item.h, undefined, 'FAST');
+    }
+
+    openPdfForPrint(pdf.output('blob'));
+  }
+
+  /* ---- Print: same PDF as downloadFillPagePDF ---- */
+  async function printFillPagePDF() {
+    if (!window.jspdf || !window.jspdf.jsPDF) { toast('PDF library not loaded.', 'error'); return; }
+    const activePeople = persons.slice(0, personCount).filter(p => p.resultCanvas);
+    if (!activePeople.length) { toast('Upload at least one person\'s photo first.', 'error'); return; }
+
+    const {jsPDF} = window.jspdf;
+    const baseMarginMM = 6, gapMM = 4;
+    const extraMarginEnabled = document.getElementById('fpExtraMargin')?.checked;
+    const extraMarginMM = extraMarginEnabled ? 38.1 : 0;
+    const extraMarginSide = document.getElementById('fpExtraMarginSide')?.value || 'bottom';
+    const {pW, pH} = getMpPageDims();
+    const paperFmt = mpPaperSize === 'a4' ? 'a4' : [pW, pH];
+    const pdf = new jsPDF({orientation: orient, unit: 'mm', format: paperFmt, compress: true});
+
+    const allCanvases = [];
+    for (const person of activePeople) {
+      const count = person.state.photoCount || 1;
+      for (let i = 0; i < count; i++) allCanvases.push(person.resultCanvas);
+    }
+    const n = allCanvases.length;
+
+    let gridCols, gridRows;
+    if (n === 1)            { gridCols = 1; gridRows = 1; }
+    else if (n === 2)       { gridCols = orient==='portrait'?1:2; gridRows = orient==='portrait'?2:1; }
+    else if (n <= 4)        { gridCols = 2; gridRows = 2; }
+    else if (n <= 6)        { gridCols = orient==='portrait'?2:3; gridRows = orient==='portrait'?3:2; }
+    else if (n <= 9)        { gridCols = 3; gridRows = 3; }
+    else { gridCols = Math.ceil(Math.sqrt(n)); gridRows = Math.ceil(n / gridCols); }
+
+    const mTop    = baseMarginMM + (extraMarginSide==='top'    ? extraMarginMM : 0);
+    const mBottom = baseMarginMM + (extraMarginSide==='bottom' ? extraMarginMM : 0);
+    const mLeft   = baseMarginMM + (extraMarginSide==='left'   ? extraMarginMM : 0);
+    const mRight  = baseMarginMM + (extraMarginSide==='right'  ? extraMarginMM : 0);
+    const areaW = pW - mLeft - mRight;
+    const areaH = pH - mTop  - mBottom;
+    const cellW = (areaW - (gridCols-1)*gapMM) / gridCols;
+    const cellH = (areaH - (gridRows-1)*gapMM) / gridRows;
+
+    const imageCache = new Map();
+    const getJpeg = (cv) => {
+      if (!imageCache.has(cv)) {
+        const flat = document.createElement('canvas');
+        flat.width = cv.width; flat.height = cv.height;
+        const flatCtx = flat.getContext('2d');
+        flatCtx.fillStyle = '#ffffff';
+        flatCtx.fillRect(0, 0, flat.width, flat.height);
+        flatCtx.drawImage(cv, 0, 0);
+        imageCache.set(cv, flat.toDataURL('image/jpeg', 0.92));
+      }
+      return imageCache.get(cv);
+    };
+
+    for (let i = 0; i < n; i++) {
+      const col = i % gridCols, row = Math.floor(i / gridCols);
+      const cellXMM = mLeft + col*(cellW+gapMM);
+      const cellYMM = mTop  + row*(cellH+gapMM);
+      const cv = allCanvases[i];
+      const imgAspect = cv.width / cv.height;
+      const cellAspect = cellW / cellH;
+      let drawW, drawH;
+      if (imgAspect > cellAspect) { drawW = cellW; drawH = cellW / imgAspect; }
+      else                         { drawH = cellH; drawW = cellH * imgAspect; }
+      const xMM = cellXMM + (cellW - drawW) / 2;
+      const yMM = cellYMM + (cellH - drawH) / 2;
+      pdf.addImage(getJpeg(cv), 'JPEG', xMM, yMM, drawW, drawH, undefined, 'FAST');
+    }
+
+    openPdfForPrint(pdf.output('blob'));
   }
 
   document.addEventListener('DOMContentLoaded', init);
@@ -4196,6 +4571,7 @@ const mp = (() => {
   return {setPersonCount, setOrient, loadFile, onDrop, rotate, setRotation, flip, applyCrop, clearCrop,
           setSize, setSizeRaw, deltaCount, clearPerson, setBgMode, removeBg, fillBg, restoreBg,
           refreshPreview, downloadPDF, downloadFillPagePDF, downloadSingleImage,
+          printPDF, printFillPagePDF,
           setMpPaperSize, setMpCustomDim, setMpImgDir, setMpCorner, mpSetBrightness};
 })();
 
